@@ -1,0 +1,9 @@
+.*
+!.gitignore
+!.github
+*.py[cod]
+**/__pycache__
+polytope_client.egg-info/
+dist/
+**/build
+*.grib
