@@ -9,6 +9,7 @@ on:
 
   # triggers the workflow on push or pull requests on the main branch
   create:
+    branches: [master]
 
 jobs:
 
