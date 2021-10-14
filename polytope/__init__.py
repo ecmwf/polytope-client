@@ -6,10 +6,14 @@
 # granted to it by virtue of its status as an intergovernmental organisation
 # nor does it submit to any jurisdiction.
 
-"""This module, the Polytope client, aids in interacting with a 
-Polytope-managed platform by providing a Command Line Interface 
-that sends HTTP requests behind the scenes to communicate 
+"""This module, the Polytope client, aids in interacting with a
+Polytope-managed platform by providing a Command Line Interface
+that sends HTTP requests behind the scenes to communicate
 with the RESTful API exposed by the Polytope frontend."""
 
 # imports here if needed
-from . import version
+from .version import __version__
+
+__all__ = [
+    "__version__",
+]

@@ -5,5 +5,5 @@
 **/__pycache__
 polytope_client.egg-info/
 dist/
-build/
+**/build
 *.grib
