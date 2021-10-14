@@ -1,9 +1,9 @@
 Welcome to Polytope's documentation!
 ====================================
 
-**Polytope** is a weather data provisioning service for cloud, developed as part of the EU projects `LEXIS <https://lexis-project.eu/web/>`_ and `HiDALGO <https://hidalgo-project.eu/>`_. The data service is exposed via a HTTP REST API, where requests can be submitted and queried until data is provided.
+**Polytope** is a weather data provisioning service for cloud, developed as part of the EU projects `LEXIS <https://lexis-project.eu/web/>`_ and `HiDALGO <https://hidalgo-project.eu/>`_. The data service is exposed via a HTTP REST API, which allows to submit requests and query their status until the data is available for downloading.
 
-**polytope-client** is a Python library for user-friendly interaction with the REST API from Python scripts or sessions, which additionally includes a command-line client tool.
+**polytope-client** is a Python library for user-friendly interaction with the REST API from Python scripts or sessions. Additionally, it includes a command-line client tool.
 
 .. note::
 
