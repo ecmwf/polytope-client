@@ -26,7 +26,7 @@ __version__ = re.search(
 ).group(1)
 
 setup(
-    name="polytope-client",
+    name="polytope",
     version=__version__,
     description="A Python and command-line client to communicate with a Polytope API server.",
     url="https://github.com/ecmwf-projects/polytope-client",
