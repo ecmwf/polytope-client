@@ -50,10 +50,27 @@ jobs:
           pip install pytest pytest-cov
           pytest -v --cov=polytope --cache-clear
 
+  docs:
+    if: github.ref == 'refs/heads/master'
+    name: Build Readthedocs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start polytope-docs build
+        uses: actions/github-script@v4
+        with:
+          github-token: ${{ secrets.ECMWF_REPO_ACCESS }}
+          script: |-
+            await github.actions.createWorkflowDispatch({
+                owner: 'ecmwf-projects',
+                repo: 'polytope-docs',
+                workflow_id: 'docs.yaml',
+                ref: 'master'
+            });
+
   deploy:
     if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
     name: Upload to Pypi
-    needs: checks
+    needs: [checks, docs]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -78,7 +95,7 @@ jobs:
           python setup.py sdist bdist_wheel
           twine upload dist/*
 
-  docs:
+  publish:
     if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
     name: Publish on Readthedocs
     needs: deploy
