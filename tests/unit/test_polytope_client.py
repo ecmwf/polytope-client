@@ -47,7 +47,6 @@ def test_session_config():
 
 
 def test_session_config_port_in_address():
-
     a = "aaa.com:123"
     p = 200
     c = Client(address=a, port=p, config_path=ValueStorage.config_path)
@@ -56,7 +55,6 @@ def test_session_config_port_in_address():
 
 
 def test_session_config_http():
-
     a = "https://aaa.com"
     c = Client(address=a, config_path=ValueStorage.config_path)
     url = c.config.get_url("api_root")
@@ -66,7 +64,6 @@ def test_session_config_http():
 
 
 def test_session_config_address_path():
-
     a = "aaa.com:32/abc"
     c = Client(address=a, config_path=ValueStorage.config_path)
     url = c.config.get_url("api_root")
@@ -76,7 +73,6 @@ def test_session_config_address_path():
 
 
 def test_session_config_address_path_with_port():
-
     a = "aaa.com/abc"
     c = Client(address=a, port=32, config_path=ValueStorage.config_path)
     url = c.config.get_url("api_root")
@@ -84,7 +80,6 @@ def test_session_config_address_path_with_port():
 
 
 def test_session_config_invalid_scheme():
-
     a = "ftp://aaa.com/abc"
     c = Client(address=a, config_path=ValueStorage.config_path)
     with pytest.raises(ValueError):
@@ -92,7 +87,6 @@ def test_session_config_invalid_scheme():
 
 
 def test_session_config_invalid_host():
-
     a = "ftp:aaa.com/abc"
     c = Client(address=a, config_path=ValueStorage.config_path)
     with pytest.raises(ValueError):
