@@ -330,7 +330,7 @@ class RequestManager:
             self._logger.info("Reading request file...")
             request = os.path.expanduser(request)
             # If we receive a file, pass it on as a string
-            with open(request, 'r') as request_file_handler:
+            with open(request, "r") as request_file_handler:
                 request = request_file_handler.read()
         else:
             # If we receive a Python dictionary, encode it as yaml
