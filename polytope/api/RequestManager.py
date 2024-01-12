@@ -570,8 +570,8 @@ class RequestManager:
             e = helpers.BugError(situation=situation)
             e.description = "Content-Type header not found in the response"
             raise e
-        if content_type in ["application/json", "application/xarray"]:
-            if content_type == "application/json":
+        if content_type in ["application/json", "application/xarray", "application/prs.coverage+json"]:
+            if content_type == "application/json" or content_type == "application/prs.coverage+json":
                 result = response.json()
                 if output_file:
                     output_file = os.path.expanduser(output_file)
@@ -583,6 +583,7 @@ class RequestManager:
                         output_file_handler.write(json.dumps(result))
                     self._logger.info("Data (" + content_type + ") saved successfully into " + output_file)
                     return output_file
+                return result
             elif content_type == "application/xarray":
                 e = helpers.PolytopeError(situation=situation)
                 e.description = "xarray data provisioning not yet " + "implemented"
