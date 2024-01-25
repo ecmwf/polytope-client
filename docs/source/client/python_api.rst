@@ -3,7 +3,7 @@
 Python API and CLI
 ====================================
 
-AA Python API for user-friendly interaction with a Polytope server is available at `polytope-client <https://github.com/ecmwf-projects/polytope-client>`_. It can be installed from source or from PyPI with ``python3 -m pip install polytope-client``.
+A Python API for user-friendly interaction with a Polytope server is available at `polytope-client <https://github.com/ecmwf-projects/polytope-client>`_. It can be installed from source or from PyPI with ``python3 -m pip install polytope-client``.
 
 Once the Python module is installed, it can either be used directly in Python scripts and sessions (i.e. ``from polytope import api``), or be used via the command-line tool that is installed together with the module (i.e. ``which polytope``).
 
