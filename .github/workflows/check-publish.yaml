@@ -49,6 +49,11 @@ jobs:
         run: |
           pip install pytest pytest-cov
           pytest -v --cov=polytope --cache-clear
+      - name: Documentation
+        run: |
+          make clean
+          make html
+        working-directory: docs
 
   deploy:
     if: ${{ github.event_name == 'release' }}
