@@ -84,20 +84,20 @@ jobs:
           python setup.py sdist bdist_wheel
           twine upload dist/* --verbose
 
-  publish:
-    if: ${{ github.event_name == 'release' }}
-    name: Publish on Readthedocs
-    needs: deploy
-    runs-on: ubuntu-latest
-    steps:
-      - name: Start polytope-docs build
-        uses: actions/github-script@v4
-        with:
-          github-token: ${{ secrets.ECMWF_REPO_ACCESS }}
-          script: |-
-            await github.actions.createWorkflowDispatch({
-                owner: 'ecmwf-projects',
-                repo: 'polytope-docs',
-                workflow_id: 'publish.yaml',
-                ref: 'master'
-            });
+  # publish:
+  #   if: ${{ github.event_name == 'release' }}
+  #   name: Publish on Readthedocs
+  #   needs: deploy
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Start polytope-docs build
+  #       uses: actions/github-script@v4
+  #       with:
+  #         github-token: ${{ secrets.ECMWF_REPO_ACCESS }}
+  #         script: |-
+  #           await github.actions.createWorkflowDispatch({
+  #               owner: 'ecmwf-projects',
+  #               repo: 'polytope-docs',
+  #               workflow_id: 'publish.yaml',
+  #               ref: 'master'
+  #           });
