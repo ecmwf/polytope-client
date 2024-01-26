@@ -19,7 +19,6 @@
 import collections
 import copy
 import hashlib
-import json
 import logging
 import os
 import pprint
@@ -320,11 +319,11 @@ class RequestManager:
         """
         situation = "trying to submit a retrieval request"
 
-        replaced_level = helpers.lower_stream_handler_level(self._logger)
-        colls = self.coll_visitor.list()
-        helpers.recover_stream_handler_level(self._logger, replaced_level)
-        if name not in colls:
-            raise ValueError("Collection name '" + name + "' not available.")
+        # replaced_level = helpers.lower_stream_handler_level(self._logger)
+        # colls = self.coll_visitor.list()
+        # helpers.recover_stream_handler_level(self._logger, replaced_level)
+        # if name not in colls:
+        #     raise ValueError("Collection name '" + name + "' not available.")
 
         if not inline_request:
             self._logger.info("Reading request file...")
@@ -570,34 +569,17 @@ class RequestManager:
             e = helpers.BugError(situation=situation)
             e.description = "Content-Type header not found in the response"
             raise e
-        if content_type in ["application/json", "application/xarray"]:
-            if content_type == "application/json":
-                result = response.json()
-                if output_file:
-                    output_file = os.path.expanduser(output_file)
-                    if append:
-                        mode = "a"
-                    else:
-                        mode = "w"
-                    with open(output_file, mode) as output_file_handler:
-                        output_file_handler.write(json.dumps(result))
-                    self._logger.info("Data (" + content_type + ") saved successfully into " + output_file)
-                    return output_file
-            elif content_type == "application/xarray":
-                e = helpers.PolytopeError(situation=situation)
-                e.description = "xarray data provisioning not yet " + "implemented"
-                raise e
-                # result = convert_to_xarray(response._content)
-                # if output_file:
-                #     output_file = os.path.expanduser(output_file)
-                #     if append:
-                #         mode = "a"
-                #     else:
-                #         mode = "w"
-                #     result.xarray_write(output_file, mode)
-                #     self._logger.info("Data (" + content_type + ") saved successfully into " + output_file)
-                #     return output_file
-            return result
+        if content_type == "application/prs.coverage+json":
+            if not output_file:
+                self._logger.info(
+                    "Parameter 'output_file' not " + "provided, proceeding to save data into a " + "temporary file..."
+                )
+                if request_id:
+                    output_file = request_id + ".covjson"
+                else:
+                    random_id = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+                    output_file = "tmp" + random_id + ".grib"
+            return self._download_to_file(response, output_file, append)
         elif content_type == "application/octet-stream":
             if output_file:
                 output_file = os.path.expanduser(output_file)

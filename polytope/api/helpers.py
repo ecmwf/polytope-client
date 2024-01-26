@@ -594,6 +594,6 @@ def try_request(method, situation, expected, logger, stream=False, skip_tls=Fals
         response, situation, url, method, stream, request_content, expected
     )
 
-    logger.debug("Polytope client received HTTP " + response_title + "\n" + str(response_messages))
+    logger.debug("Polytope client received HTTP " + response_title)
 
     return response, response_messages

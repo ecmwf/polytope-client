@@ -45,18 +45,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install setuptools wheel
           pip install -e .
+          pip install -r docs/requirements.txt
       - name: Unit tests
         run: |
           pip install pytest pytest-cov
           pytest -v --cov=polytope --cache-clear
+      - name: Documentation
+        run: |
+          make clean
+          make html
+        working-directory: docs
 
   deploy:
-    if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
+    if: ${{ github.event_name == 'release' }}
     name: Upload to Pypi
     needs: [checks]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Set up python
         uses: actions/setup-python@v2
         with:
@@ -72,26 +78,26 @@ jobs:
           pip install setuptools wheel twine
       - name: Build and publish
         env:
-          TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
-          TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+          TWINE_USERNAME: "__token__"
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
           python setup.py sdist bdist_wheel
-          twine upload dist/*
+          twine upload dist/* --verbose
 
-  publish:
-    if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
-    name: Publish on Readthedocs
-    needs: deploy
-    runs-on: ubuntu-latest
-    steps:
-      - name: Start polytope-docs build
-        uses: actions/github-script@v4
-        with:
-          github-token: ${{ secrets.ECMWF_REPO_ACCESS }}
-          script: |-
-            await github.actions.createWorkflowDispatch({
-                owner: 'ecmwf-projects',
-                repo: 'polytope-docs',
-                workflow_id: 'publish.yaml',
-                ref: 'master'
-            });
+  # publish:
+  #   if: ${{ github.event_name == 'release' }}
+  #   name: Publish on Readthedocs
+  #   needs: deploy
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Start polytope-docs build
+  #       uses: actions/github-script@v4
+  #       with:
+  #         github-token: ${{ secrets.ECMWF_REPO_ACCESS }}
+  #         script: |-
+  #           await github.actions.createWorkflowDispatch({
+  #               owner: 'ecmwf-projects',
+  #               repo: 'polytope-docs',
+  #               workflow_id: 'publish.yaml',
+  #               ref: 'master'
+  #           });
