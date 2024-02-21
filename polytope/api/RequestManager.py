@@ -320,6 +320,7 @@ class RequestManager:
         situation = "trying to submit a retrieval request"
 
         # replaced_level = helpers.lower_stream_handler_level(self._logger)
+        # helpers.lower_stream_handler_level(self._logger)
         # colls = self.coll_visitor.list()
         # helpers.recover_stream_handler_level(self._logger, replaced_level)
         # if name not in colls:

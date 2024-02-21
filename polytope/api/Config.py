@@ -122,7 +122,7 @@ class Config:
             self.config_path = config_path
         else:
             self.config_path = Path.home() / ".polytope-client"
-        self.default_config["key_path"] = str(self.config_path / "keys")
+        self.default_config["key_path"] = Path.home() / ".polytopeapirc"
         self.file_config = helpers.read_config(self.config_path)
 
         # Reading env var configuration

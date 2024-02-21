@@ -148,17 +148,25 @@ class Auth:
                 email = self.read_email
                 self._logger.info("Polytope user key found in session cache for user " + config["username"])
             else:
-                key_file = Path(config["key_path"]) / config["username"]
+                key_file = Path(config["key_path"])
                 try:
                     with open(str(key_file), "r") as infile:
                         info = json.load(infile)
-                        key = info["key"]
-                        email = info["email"]
+                        key = info["user_key"]
+                        email = info["user_email"]
+
+                # TODO: this is messy
                 except FileNotFoundError:
-                    key = None
-                    email = None
-                    if login:
-                        key, email = self.login(persist=False)
+                    try:
+                        with open(str(Path.home() / ".ecmwfapirc"), "r") as infile:
+                            info = json.load(infile)
+                            key = info["key"]
+                            email = info["email"]
+                    except FileNotFoundError:
+                        key = None
+                        email = None
+                        if login:
+                            key, email = self.login(persist=False)
                 else:
                     self.read_key = key
                     self.read_email = email
@@ -188,7 +196,7 @@ class Auth:
         if not username:
             username = config["username"]
         os.makedirs(config["key_path"], exist_ok=True)
-        key_file = Path(config["key_path"]) / username
+        key_file = Path(config["key_path"])
         with open(str(key_file), "w", encoding="utf8") as outfile:
             json.dump({"key": key, "email": email}, outfile)
         self.read_key = key
@@ -212,7 +220,7 @@ class Auth:
         config = self.config.get()
         if not username:
             username = config["username"]
-        key_path = Path(config["key_path"]) / username
+        key_path = Path(config["key_path"])
         try:
             os.remove(str(key_path))
             self._logger.info("Credentials removed for " + username)
