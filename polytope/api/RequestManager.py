@@ -579,7 +579,7 @@ class RequestManager:
                     output_file = request_id + ".covjson"
                 else:
                     random_id = "".join(random.choices(string.ascii_letters + string.digits, k=16))
-                    output_file = "tmp" + random_id + ".grib"
+                    output_file = "tmp" + random_id + ".covjson"
             return self._download_to_file(response, output_file, append)
         elif content_type == "application/octet-stream":
             if output_file:

@@ -50,6 +50,8 @@ class Auth:
         user_key, user_email, _ = self.fetch_key(login=False)
         if user_key and user_email:
             auth_headers.append("EmailKey %s:%s" % (user_email, user_key))
+        if user_key and not user_email:
+            auth_headers.append("Bearer %s" % (user_key))
         config = self.config.get()
         bearer_key = config["user_key"]
         if bearer_key:
@@ -152,16 +154,16 @@ class Auth:
                 try:
                     with open(str(key_file), "r") as infile:
                         info = json.load(infile)
-                        key = info["user_key"]
-                        email = info["user_email"]
+                        key = info.get("user_key", None)
+                        email = info.get("user_email", None)
 
                 # TODO: this is messy
                 except FileNotFoundError:
                     try:
                         with open(str(Path.home() / ".ecmwfapirc"), "r") as infile:
                             info = json.load(infile)
-                            key = info["key"]
-                            email = info["email"]
+                            key = info.get("user_key", None)
+                            email = info.get("user_email", None)
                     except FileNotFoundError:
                         key = None
                         email = None
