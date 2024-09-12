@@ -53,9 +53,6 @@ class Auth:
         if user_key and not user_email:
             auth_headers.append("Bearer %s" % (user_key))
         config = self.config.get()
-        bearer_key = config["user_key"]
-        if bearer_key:
-            auth_headers.append("Bearer %s" % (bearer_key))
         username = config["username"]
         password = config["password"]
         if username and password:
