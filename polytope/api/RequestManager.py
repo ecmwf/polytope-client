@@ -427,7 +427,9 @@ class RequestManager:
         if len(user_requests) > 1 and not output_file:
             output_file = "+".join(request_ids_pending_for_download) + ".grib"
 
-        for i, (request_url, request_id) in enumerate(zip(request_urls_pending_for_download, request_ids_pending_for_download)):
+        for i, (request_url, request_id) in enumerate(
+            zip(request_urls_pending_for_download, request_ids_pending_for_download)
+        ):
             if not request_url:
                 continue
 
