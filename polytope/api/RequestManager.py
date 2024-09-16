@@ -427,7 +427,7 @@ class RequestManager:
         if len(user_requests) > 1 and not output_file:
             output_file = "+".join(request_ids_pending_for_download) + ".grib"
 
-        for i, request_url in enumerate(request_urls_pending_for_download):
+        for i, (request_url, request_id) in enumerate(zip(request_urls_pending_for_download, request_ids_pending_for_download)):
             if not request_url:
                 continue
 
@@ -448,7 +448,7 @@ class RequestManager:
                 request_results[i] = Result(request_url, output_file, append, self)
             else:
                 request_results[i] = self.download(
-                    request_url, output_file, asynchronous, max_attempts, attempt_period, append, pointer
+                    request_id, output_file, asynchronous, max_attempts, attempt_period, append, pointer
                 )
 
             append = True
@@ -460,7 +460,7 @@ class RequestManager:
 
     def _download_to_file(self, response, output_file, append):
         situation = "trying to download data"
-        output_file = os.path.expanduser(output_file)
+        output_file = os.path.abspath(output_file)
         self._logger.info("Saving data into {}...".format(output_file))
         start = time.time()
         data_downloaded = False
