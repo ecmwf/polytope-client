@@ -528,7 +528,7 @@ def process_response(response, situation, url, method, stream, request_content, 
     return response_title, response_messages
 
 
-def try_request(method, situation, expected, logger, stream=False, skip_tls=False, **kwargs):
+def try_request(method, situation, expected, logger, stream=False, skip_tls=False, session=None, **kwargs):
     url = kwargs.get("url", None)
     verify = not skip_tls
     request_content = {"headers": kwargs.get("headers", None), "json": kwargs.get("json", None)}
@@ -551,7 +551,11 @@ def try_request(method, situation, expected, logger, stream=False, skip_tls=Fals
     success = False
     while attempt <= max_attempts:
         try:
-            method_to_call = getattr(requests, method)
+            if session is None:
+                method_to_call = getattr(requests, method)
+            else:
+                method_to_call = getattr(session, method)
+
             logger.debug("Polytope client attempting HTTP " + method.upper() + " " + url + "\n" + str(request_content))
             response = method_to_call(**kwargs, verify=verify, stream=stream)
         except requests.exceptions.ConnectionError as e:
