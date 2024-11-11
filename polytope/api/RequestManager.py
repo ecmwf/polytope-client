@@ -703,7 +703,7 @@ class RequestManager:
                 url=url,
                 headers=headers,
                 skip_tls=self.config.get()["skip_tls"],
-                session=s
+                session=s,
             )
             if response.status_code == requests.codes.ok:
                 last_status = "processed"
