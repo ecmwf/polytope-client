@@ -620,7 +620,7 @@ class RequestManager:
         output_file=None,
         asynchronous=False,
         max_attempts=None,
-        attempt_period=0.1,
+        attempt_period=0.03,
         append=False,
         pointer=False,
     ):
@@ -685,6 +685,9 @@ class RequestManager:
         expected_responses = [requests.codes.ok, requests.codes.accepted]
         # requests will handle automatically requests.codes.other
         self._logger.info("Checking request status (" + request_id + ")...")
+
+        s = requests.Session()
+
         while not data_ready:
             if attempts > describe_max_attempts:
                 e = helpers.RetriesExceededError(
@@ -700,6 +703,7 @@ class RequestManager:
                 url=url,
                 headers=headers,
                 skip_tls=self.config.get()["skip_tls"],
+                session=s,
             )
             if response.status_code == requests.codes.ok:
                 last_status = "processed"
@@ -723,7 +727,7 @@ class RequestManager:
                 if not asynchronous:
                     time.sleep(new_attempt_period)
                 attempts = attempts + 1
-                new_attempt_period *= 1.2
+                new_attempt_period *= 1.05
                 new_attempt_period = min(new_attempt_period, max_attempt_period)
 
         if pointer:
