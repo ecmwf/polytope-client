@@ -246,3 +246,8 @@ polytope archive <collection_name> <metadata.yaml> <input_url> [-m|--max-attempt
 polytope upload <request_id> <input_url> [-A|--async] [-m|--max-attempts]
                             [-P|--attempt-period] [--global opts ...]
 ```
+
+
+## Acknowledgements
+
+Past and current funding and support is listed in the adjoining [Acknowledgements](./ACKNOWLEDGEMENTS.rst).
