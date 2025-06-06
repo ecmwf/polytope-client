@@ -159,8 +159,8 @@ class Auth:
                     try:
                         with open(str(Path.home() / ".ecmwfapirc"), "r") as infile:
                             info = json.load(infile)
-                            key = info.get("user_key", None)
-                            email = info.get("user_email", None)
+                            key = info.get("key", None)
+                            email = info.get("email", None)
                     except FileNotFoundError:
                         key = None
                         email = None
