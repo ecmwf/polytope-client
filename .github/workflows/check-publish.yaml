@@ -64,4 +64,6 @@ jobs:
     name: Upload to Pypi
     uses: ecmwf/reusable-workflows/.github/workflows/cd-pypi.yml@v2
     secrets: inherit
+    with:
+      testpypi: true
 
