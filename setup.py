@@ -37,7 +37,6 @@ setup(
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
         "Intended Audience :: Science/Research",
-        "License :: OSI Approved :: Apache Software License",
         "Natural Language :: English",
         "Operating System :: POSIX :: Linux",
         "Programming Language :: Python",
@@ -47,8 +46,4 @@ setup(
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
     ],
-    setuptools_git_versioning={
-        "enabled": True,
-    },
-    setup_requires=["setuptools-git-versioning>=2.0,<3"],
 )
