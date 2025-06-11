@@ -1,2 +1,43 @@
+[project]
+name = "polytope-client"
+description = "A Python and command-line client to communicate with a Polytope API server."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE.txt"]
+authors = [{ name = "ECMWF", email = "software.support@ecmwf.int" }]
+urls = { "Homepage" = "https://github.com/ecmwf-projects/polytope-client" }
+dependencies = [
+    "Click",
+    "requests",
+    "pyyaml",
+    "jsonschema",
+    "docstring_parser",
+    "tqdm",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dynamic = ["version"]
+
+[project.scripts]
+polytope = "polytope.cli.cli:cli"
+
+[build-system]
+requires = ["setuptools", "setuptools_scm"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+local_scheme = "no-local-version"
+
 [tool.black]
 line-length = 120
