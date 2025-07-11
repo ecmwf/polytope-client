@@ -141,37 +141,23 @@ class RequestManager:
         associated to the request is removed from the Polytope server.
 
         :param request_id: ID or URL of the target request, or 'all' to remove all
-        existing user requests.
+        existing non-started user requests.
         :type request_id: str
         :returns: None
         """
-        situation = "trying to revoke a request"
 
         headers = {"Authorization": ", ".join(self.auth.get_auth_headers())}
 
-        if request_id == "all":
-            request_ids = self.list()
-        else:
-            request_ids = [request_id]
-
-        for id in request_ids:
-            self._logger.info("Revoking request " + id + "...")
-            method = "delete"
-            if "://" in id:
-                url = id
-            else:
-                url = self.config.get_url("requests", id)
-            expected_responses = [requests.codes.ok]
-            response, _ = helpers.try_request(
-                method,
-                situation=situation,
-                expected=expected_responses,
-                logger=self._logger,
-                url=url,
-                headers=headers,
-                skip_tls=self.config.get()["skip_tls"],
-            )
-            self._logger.info("Request deleted successfully")
+        response, messages = helpers.try_request(
+            method="delete",
+            situation="trying to revoke a request",
+            expected=[requests.codes.ok],
+            logger=self._logger,
+            url=self.config.get_url("requests", request_id=request_id),
+            headers=headers,
+            skip_tls=self.config.get()["skip_tls"],
+        )
+        self._logger.info(messages["message"])
 
     # POST /api/v1/requests/<collection> with verb = retrieve
     # and, implicitly after automatic 303 redirect:
