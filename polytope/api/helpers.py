@@ -285,13 +285,10 @@ class LogFormatter(logging.Formatter):
 
 
 def set_stream_handler(logger, quiet, log_level):
-    old_handler = None
-    for handler in logger.handlers:
-        if type(handler).__name__ == "StreamHandler":
-            old_handler = handler
-            break
-    if old_handler:
-        logger.removeHandler(old_handler)
+    # Remove all existing stream handlers to avoid duplicates
+    for handler in list(logger.handlers):
+        if isinstance(handler, logging.StreamHandler):
+            logger.removeHandler(handler)
 
     if not quiet:
         new_handler = logging.StreamHandler()
@@ -303,16 +300,24 @@ def set_stream_handler(logger, quiet, log_level):
         new_handler.setFormatter(formatter)
         new_handler._polytope_handler_type = "stream"
         logger.addHandler(new_handler)
+        # Prevent messages from being emitted twice via ancestor (root) handlers
+        # when the application also configures logging.
+        logger.propagate = False
+    else:
+        # If quiet mode is on, ensure that no messages are propagated to the
+        # root logger, which may have handlers configured by the application.
+        logger.propagate = False
+        # Also add a handler that ignores all messages, to avoid logging.info
+        # calls from creating handlers
+        new_handler = logging.NullHandler()
+        logger.addHandler(new_handler)
 
 
 def set_file_handler(logger, log_file, log_level):
-    old_handler = None
-    for handler in logger.handlers:
-        if type(handler).__name__ == "FileHandler":
-            old_handler = handler
-            break
-    if old_handler:
-        logger.removeHandler(old_handler)
+    # Remove all existing file handlers to avoid duplicates
+    for handler in list(logger.handlers):
+        if isinstance(handler, logging.FileHandler):
+            logger.removeHandler(handler)
 
     if log_file:
         new_handler = logging.FileHandler(log_file)
@@ -323,6 +328,8 @@ def set_file_handler(logger, log_file, log_level):
         formatter = LogFormatter(True)
         new_handler.setFormatter(formatter)
         logger.addHandler(new_handler)
+        # Prevent duplicate file logs via propagation to parent handlers
+        logger.propagate = False
 
 
 def lower_stream_handler_level(logger):
