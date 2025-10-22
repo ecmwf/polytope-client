@@ -318,16 +318,6 @@ class RequestManager:
             # If we receive a file, pass it on as a string
             with open(request, "r") as request_file_handler:
                 request = request_file_handler.read()
-        else:
-            # If we receive a Python dictionary, encode it as yaml
-            # TODO: we don't know what the eventual data source requires,
-            # encoding to YAML is the most flexible approach for now, but
-            # this needs a more robust solution.
-            if isinstance(request, dict):
-                request = yaml.safe_dump(request)
-            # else try to convert plainly to string
-            else:
-                request = str(request)
         if not isinstance(request, list):
             user_requests = [request]
         else:
@@ -338,6 +328,16 @@ class RequestManager:
         request_results = []
         warnings = []
         for request in user_requests:
+
+            # If we receive a Python dictionary, encode it as yaml
+            # TODO: we don't know what the eventual data source requires,
+            # encoding to YAML is the most flexible approach for now, but
+            # this needs a more robust solution.
+            if isinstance(request, dict):
+                request = yaml.safe_dump(request)
+            # else try to convert plainly to string
+            else:
+                request = str(request)
             collection = name
             request_object = {"verb": "retrieve", "request": request}
 
