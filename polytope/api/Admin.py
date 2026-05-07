@@ -46,7 +46,9 @@ class Admin:
         situation = "trying to describe a user"
 
         url = self.config.get_url("users")
-        headers = {"Content-Type": "application/json", "Authorization": ", ".join(self.auth.get_auth_headers())}
+        headers = self.config.request_headers(
+            {"Content-Type": "application/json", "Authorization": ", ".join(self.auth.get_auth_headers())}
+        )
         method = "get"
         expected_responses = [requests.codes.ok]
         response, response_messages = helpers.try_request(
@@ -87,6 +89,7 @@ class Admin:
             expected=expected_responses,
             logger=self._logger,
             url=url,
+            headers=self.config.request_headers(),
             skip_tls=self.config.get()["skip_tls"],
         )
         message = "The Polytope server is operating and accessible."

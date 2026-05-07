@@ -103,6 +103,35 @@ c.archive('archive-collection', request, r[0]['location'])
 c.revoke('all')
 ```
 
+### Extra HTTP headers
+
+The Python client can attach additional HTTP headers to requests. This is intended only for non-secret, safe metadata/debug headers; do not use it for credentials, cookies, tokens, or other sensitive values.
+
+Extra headers can be supplied directly to the constructor:
+
+```python
+from polytope.api import Client
+
+c = Client(extra_headers={"Polytope-Mock-Roles": "beta:viewer"})
+```
+
+They can also be stored in the client configuration file:
+
+```yaml
+extra_headers:
+  Polytope-Mock-Roles: beta:viewer
+```
+
+or provided with the `POLYTOPE_EXTRA_HEADERS` environment variable. The environment variable value must be a JSON object string mapping header names to values:
+
+```bash
+export POLYTOPE_EXTRA_HEADERS='{"Polytope-Mock-Roles":"beta:viewer"}'
+```
+
+Administrators can use this with server-side mocking/debug features, for example to test role-dependent behaviour with `Polytope-Mock-Roles: beta:viewer`.
+
+Unsafe or request-controlled headers are rejected case-insensitively. This includes authentication headers, cookies, hop-by-hop/protocol headers, content/range/checksum headers, and proxy/attribution IP headers. Blocked examples include `Cookie`, `Set-Cookie`, `X-Forwarded-For`, `X-Real-IP`, `Forwarded`, and `X-Proxy-Protocol-Addr`.
+
 &nbsp;
 ## 4. CLI example
 

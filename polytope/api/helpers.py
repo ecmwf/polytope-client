@@ -19,6 +19,7 @@
 import json
 import logging
 import os
+import re
 import socket
 import time
 from inspect import signature
@@ -236,6 +237,88 @@ def authenticated(method):
     return decorated
 
 
+# Header-related helper functions
+###
+
+# RFC 9110 token syntax for field names.
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+
+UNSAFE_EXTRA_HEADERS = frozenset(
+    name.lower()
+    for name in [
+        "Authorization",
+        "Proxy-Authorization",
+        "Cookie",
+        "Set-Cookie",
+        "Host",
+        "Content-Length",
+        "Transfer-Encoding",
+        "Connection",
+        "Keep-Alive",
+        "TE",
+        "Trailer",
+        "Upgrade",
+        "Content-Type",
+        "Content-Encoding",
+        "Accept-Encoding",
+        "Range",
+        "X-Checksum",
+        "X-Forwarded-For",
+        "X-Real-IP",
+        "Forwarded",
+        "X-Proxy-Protocol-Addr",
+    ]
+)
+
+
+def parse_extra_headers_json(value):
+    def reject_duplicate_pairs(pairs):
+        seen = set()
+        result = {}
+        for key, item in pairs:
+            key_lower = str(key).lower()
+            if key_lower in seen:
+                raise ValueError("Duplicate extra header name: " + str(key))
+            seen.add(key_lower)
+            result[key] = item
+        return result
+
+    try:
+        return json.loads(value, object_pairs_hook=reject_duplicate_pairs)
+    except ValueError:
+        raise
+    except Exception as e:
+        raise ValueError("extra_headers must be a JSON object string") from e
+
+
+def normalize_extra_headers(extra_headers, reject_unsafe=True):
+    if extra_headers in (None, ""):
+        return {}
+    if isinstance(extra_headers, str):
+        extra_headers = parse_extra_headers_json(extra_headers)
+    if not isinstance(extra_headers, dict):
+        raise ValueError("extra_headers must be a mapping of header names to values")
+
+    normalized = {}
+    seen = set()
+    for name, value in extra_headers.items():
+        if not isinstance(name, str):
+            raise ValueError("Extra header names must be strings")
+        if not _HEADER_NAME_RE.match(name):
+            raise ValueError("Invalid extra header name: " + name)
+        name_lower = name.lower()
+        if name_lower in seen:
+            raise ValueError("Duplicate extra header name: " + name)
+        seen.add(name_lower)
+        if reject_unsafe and name_lower in UNSAFE_EXTRA_HEADERS:
+            raise ValueError("Unsafe extra header is not allowed: " + name)
+        value = str(value)
+        if "\r" in value or "\n" in value:
+            raise ValueError("Extra header values must not contain CR or LF characters")
+        normalized[name] = value
+    return normalized
+
+
 # Logging-related helper functions
 ###
 
@@ -274,12 +357,8 @@ class LogFormatter(logging.Formatter):
             if isinstance(val, typ):
                 result[name] = val
             else:
-                raise TypeError(
-                    "Extra information with key {} is \
-                     expected to be of type {}".format(
-                        name, typ
-                    )
-                )
+                raise TypeError("Extra information with key {} is \
+                     expected to be of type {}".format(name, typ))
 
         return json.dumps(result, indent=self.indent, sort_keys=True)
 
@@ -415,6 +494,8 @@ def convert_back(dictionary):
                 )
         elif k == "key_path":
             dictionary[k] = os.path.expanduser(v)
+        elif k == "extra_headers":
+            dictionary[k] = normalize_extra_headers(v)
 
 
 def validate_config(dictionary):

@@ -63,7 +63,7 @@ class RequestManager:
 
         self._logger.info("Fetching requests...")
         url = self.config.get_url("requests", collection_id=collection_id)
-        headers = {"Authorization": ", ".join(self.auth.get_auth_headers())}
+        headers = self.config.request_headers({"Authorization": ", ".join(self.auth.get_auth_headers())})
         method = "get"
         expected_responses = [requests.codes.ok]
         response, _ = helpers.try_request(
@@ -105,7 +105,7 @@ class RequestManager:
 
         self._logger.info("Fetching request...")
         url = self.config.get_url("requests")
-        headers = {"Authorization": ", ".join(self.auth.get_auth_headers())}
+        headers = self.config.request_headers({"Authorization": ", ".join(self.auth.get_auth_headers())})
         method = "get"
         expected_responses = [requests.codes.ok]
         response, response_messages = helpers.try_request(
@@ -146,7 +146,7 @@ class RequestManager:
         :returns: None
         """
 
-        headers = {"Authorization": ", ".join(self.auth.get_auth_headers())}
+        headers = self.config.request_headers({"Authorization": ", ".join(self.auth.get_auth_headers())})
 
         response, messages = helpers.try_request(
             method="delete",
@@ -345,7 +345,7 @@ class RequestManager:
             self._logger.info(message)
 
             url = self.config.get_url("requests", collection_id=collection)
-            headers = {"Authorization": ", ".join(self.auth.get_auth_headers())}
+            headers = self.config.request_headers({"Authorization": ", ".join(self.auth.get_auth_headers())})
             method = "post"
             expected_responses = [requests.codes.ok, requests.codes.accepted, requests.codes.no_content]
             # also requests.codes.other, implicitly handled by requests
@@ -666,7 +666,7 @@ class RequestManager:
             request_id = url.split("/")[-1]
         else:
             url = self.config.get_url("requests", request_id=request_id)
-        headers = {"Authorization": ", ".join(self.auth.get_auth_headers())}
+        headers = self.config.request_headers({"Authorization": ", ".join(self.auth.get_auth_headers())})
         method = "get"
         expected_responses = [requests.codes.ok, requests.codes.accepted]
         # requests will handle automatically requests.codes.other
@@ -846,7 +846,7 @@ class RequestManager:
         self._logger.info(message)
 
         url = self.config.get_url("upload", collection_id=collection)
-        headers = {"Authorization": ", ".join(self.auth.get_auth_headers())}
+        headers = self.config.request_headers({"Authorization": ", ".join(self.auth.get_auth_headers())})
         method = "post"
         expected_responses = [requests.codes.accepted, requests.codes.other]
         # requests.codes.other is handled explicitly here (allow_redirects = False)
@@ -935,11 +935,13 @@ class RequestManager:
             data_checksum = hashlib.md5(data).hexdigest()
 
             method = "post"
-            headers = {
-                "Content-Type": "application/x-grib",
-                "Authorization": ", ".join(self.auth.get_auth_headers()),
-                "X-Checksum": data_checksum,
-            }
+            headers = self.config.request_headers(
+                {
+                    "Content-Type": "application/x-grib",
+                    "Authorization": ", ".join(self.auth.get_auth_headers()),
+                    "X-Checksum": data_checksum,
+                }
+            )
 
             start = time.time()
             data_uploaded = False
@@ -985,7 +987,7 @@ class RequestManager:
 
         situation = "waiting for the server to list the uploaded data"
         self._logger.info("Waiting for the server to list the uploaded data...")
-        headers = {"Authorization": ", ".join(self.auth.get_auth_headers())}
+        headers = self.config.request_headers({"Authorization": ", ".join(self.auth.get_auth_headers())})
         method = "get"
 
         data_ready = False

@@ -57,6 +57,7 @@ class Client:
         # https
         insecure=None,
         skip_tls=None,
+        extra_headers=None,
         # other
         cli=False,
     ):
@@ -101,6 +102,8 @@ class Client:
         :type insecure: bool
         :param skip_tls: Skip TLS certificate verification.
         :type skip_tls: bool
+        :param extra_headers: Additional safe HTTP headers to send with requests.
+        :type extra_headers: dict
         :param cli: Whether the Client is being created from a CLI or not
         (configured automatically). This will determine whether some messages
         are printed or not by the client.
@@ -129,6 +132,7 @@ class Client:
             password,
             insecure=insecure,
             skip_tls=skip_tls,
+            extra_headers=extra_headers,
             logger=self._logger,
             cli=self._cli,
         )

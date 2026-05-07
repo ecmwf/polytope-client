@@ -111,7 +111,9 @@ class Auth:
 
         url = self.config.get_url("auth")
         encode_str = "%s:%s" % (username, password)
-        headers = {"Authorization": "Basic %s" % base64.b64encode(bytes(encode_str, "utf-8")).decode("utf-8")}
+        headers = self.config.request_headers(
+            {"Authorization": "Basic %s" % base64.b64encode(bytes(encode_str, "utf-8")).decode("utf-8")}
+        )
         data = {}
         method = "post"
         expected_responses = [requests.codes.ok]

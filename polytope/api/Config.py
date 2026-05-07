@@ -48,6 +48,7 @@ class Config:
         skip_tls=None,
         logger=None,
         cli=False,
+        extra_headers=None,
     ):
         # hard-coded defaults are not specified in the __init__ header
         # so that session configuration specified in the headers is not
@@ -82,6 +83,7 @@ class Config:
             "password",
             "insecure",
             "skip_tls",
+            "extra_headers",
         ]
 
         # Reading session configuration
@@ -108,6 +110,7 @@ class Config:
         config["password"] = None
         config["insecure"] = False
         config["skip_tls"] = False
+        config["extra_headers"] = {}
         self.default_config = config
 
         # Reading system-wide file configuration
@@ -133,6 +136,8 @@ class Config:
         for var in self.file_config_items:
             val = os.environ.get(fun(var))
             if val:
+                if var == "extra_headers":
+                    val = helpers.parse_extra_headers_json(val)
                 env_var_config[var] = val
         self.env_var_config = env_var_config
 
@@ -237,7 +242,19 @@ class Config:
             if isinstance(config[item], str):
                 config[item] = config[item].lower() in ["true", "1"]
 
+        config["extra_headers"] = helpers.normalize_extra_headers(config.get("extra_headers", {}))
+
         return config
+
+    def request_headers(self, base=None):
+        headers = {} if base is None else dict(base)
+        base_names = {str(name).lower() for name in headers}
+        extra_headers = helpers.normalize_extra_headers(self.get().get("extra_headers", {}))
+        for name, value in extra_headers.items():
+            if name.lower() in base_names:
+                raise ValueError("Extra header duplicates base request header: " + name)
+            headers[name] = value
+        return headers
 
     def update_loggers(self):
         config_dict = self.get()
@@ -427,6 +444,11 @@ class Config:
         print_value = value
         if key == "password" and value:
             print_value = "**hidden**"
+        if key == "extra_headers":
+            if isinstance(value, str):
+                value = helpers.parse_extra_headers_json(value)
+            value = helpers.normalize_extra_headers(value)
+            print_value = "**hidden**" if value else {}
 
         self.session_config[key] = value
         self.update_loggers()

@@ -44,7 +44,7 @@ class CollectionVisitor:
 
         self._logger.info("Fetching collections...")
         url = self.config.get_url("collections")
-        headers = {"Authorization": ", ".join(self.auth.get_auth_headers())}
+        headers = self.config.request_headers({"Authorization": ", ".join(self.auth.get_auth_headers())})
         method = "get"
         expected_responses = [requests.codes.ok]
         response, _ = helpers.try_request(
