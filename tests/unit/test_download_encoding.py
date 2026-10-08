@@ -219,6 +219,52 @@ def test_download_decodes_every_codec(server, tmp_path, codec, content_length):
     assert Path(result).read_bytes() == BODY
 
 
+@pytest.mark.parametrize("codec", [encoding.GZIP, encoding.ZSTD])
+def test_progress_and_completeness_count_wire_bytes(server, tmp_path, codec, caplog):
+    skip_unless_available(codec)
+    payload = encode(BODY, codec)
+    assert len(payload) < len(BODY)
+    server.spec = Spec(payload, content_encoding=codec)
+
+    output_file = str(tmp_path / "result.covjson")
+    with caplog.at_level(logging.INFO, logger=LOGGER.name):
+        manager()._download_to_file(get(server), output_file, append=False)
+
+    assert Path(output_file).read_bytes() == BODY
+    # The completeness check compared the compressed bytes against
+    # Content-Length; the decoded bytes are what reached the file.
+    written = [record.getMessage() for record in caplog.records if record.getMessage().startswith("Wrote ")]
+    assert len(written) == 1
+    assert codec in written[0]
+    assert helpers.bytes_to_string(len(payload)) in written[0]
+    assert helpers.bytes_to_string(len(BODY)) in written[0]
+
+
+@pytest.mark.parametrize("codec", CODECS)
+def test_interrupted_chunked_download_restarts_from_the_beginning(server, tmp_path, codec, monkeypatch):
+    """Without a Content-Length there is no total to resume against."""
+    skip_unless_available(codec)
+    payload = encode(BODY, codec)
+    server.spec = Spec(
+        payload,
+        content_encoding=None if codec == encoding.IDENTITY else codec,
+        content_length=False,
+        drop_after=len(payload) // 3,
+    )
+
+    decoders = []
+    original_make_decoder = encoding.make_decoder
+    monkeypatch.setattr(encoding, "make_decoder", lambda name: decoders.append(name) or original_make_decoder(name))
+
+    output_file = str(tmp_path / "result.covjson")
+    manager()._download_to_file(get(server), output_file, append=False)
+
+    assert Path(output_file).read_bytes() == BODY
+    assert len(server.received) == 2
+    assert "range" not in server.received[1]
+    assert decoders == [codec, codec]
+
+
 @pytest.mark.parametrize("codec", CODECS)
 def test_resume_keeps_the_decoder_state(server, tmp_path, codec, monkeypatch):
     skip_unless_available(codec)
