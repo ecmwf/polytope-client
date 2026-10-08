@@ -145,7 +145,7 @@ A Polytope server may compress a result and serve it with a `Content-Encoding`. 
 
 | Option | Values | Default | Meaning |
 | --- | --- | --- | --- |
-| `compression` | `auto`, `none`, `gzip`, `zstd` | `auto` | Codec advertised to the server. `auto` offers `zstd, gzip`, the codecs this client can decode, and falls back to `gzip` alone if the installed `urllib3` turns out to have no zstd decoder. `none` asks for uncompressed data. The codec a result is stored with is settled when the request is submitted, and an asynchronous `Result` remembers it so that its `download()` asks for the same one. |
+| `compression` | `auto`, `none`, `gzip`, `zstd` | `auto` | Codec advertised to the server. `auto` offers `zstd, gzip`, the codecs this client can decode, and falls back to `gzip` alone when the installed `urllib3` has no zstd decoder. `none` asks for uncompressed data. The codec a result is stored with is settled when the request is submitted, and an asynchronous `Result` remembers it so that its `download()` asks for the same one. |
 | `decompress` | `True`, `False` | `True` | Whether to decompress the result while downloading it. With `False` the compressed stream is saved as received and the suffix of the codec the server used (`.gz` or `.zst`) is appended to the output file name; a result that was not compressed keeps the name asked for. |
 
 Both can be set per client, per call, in the configuration file, or through the environment:

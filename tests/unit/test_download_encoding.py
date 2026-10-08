@@ -1074,7 +1074,7 @@ def test_invalid_decompress_environment_variable_is_refused(tmp_path, monkeypatc
     with pytest.raises(ValueError) as raised:
         Client(config_path=tmp_path / "env")
 
-    # 'yes' used to mean False, silently.
+    # the error names the variable and the value, so that 'yes' is not read as False
     assert "POLYTOPE_DECOMPRESS" in str(raised.value)
     assert "yes" in str(raised.value)
 
