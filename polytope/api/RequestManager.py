@@ -756,7 +756,7 @@ class RequestManager:
                 else:
                     random_id = "".join(random.choices(string.ascii_letters + string.digits, k=16))
                     output_file = "tmp" + random_id + ".grib"
-            return self._download_to_file(response, output_file, append)
+            return self._download_to_file(response, output_file, append, decompress=decompress)
         else:
             e = helpers.BugError(situation=situation)
             e.description = "Received unsupported content type: " + content_type

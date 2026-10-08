@@ -490,6 +490,29 @@ def test_grib_download(server, tmp_path):
     assert Path(output_file).read_bytes() == BODY
 
 
+def test_grib_decompress_false_keeps_the_stream(server, tmp_path):
+    payload = encode(BODY, encoding.GZIP)
+    server.spec = Spec(payload, content_encoding="gzip", content_type="application/x-grib")
+
+    output_file = str(tmp_path / "result.grib")
+    result = manager()._download(get(server), output_file, False, decompress=False)
+
+    assert result == output_file + ".gz"
+    assert Path(result).read_bytes() == payload
+    assert not os.path.exists(output_file)
+
+
+def test_grib_decompress_false_without_output_file(server, tmp_path, monkeypatch):
+    payload = encode(BODY, encoding.GZIP)
+    server.spec = Spec(payload, content_encoding="gzip", content_type="application/x-grib")
+    monkeypatch.chdir(tmp_path)
+
+    result = manager()._download(get(server), None, False, request_id="req-1", decompress=False)
+
+    assert os.path.basename(result) == "req-1.grib.gz"
+    assert Path(result).read_bytes() == payload
+
+
 def test_octet_stream_download(server, tmp_path):
     server.spec = Spec(encode(BODY, encoding.GZIP), content_encoding="gzip", content_type="application/octet-stream")
 
