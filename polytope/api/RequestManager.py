@@ -528,8 +528,7 @@ class RequestManager:
             output_file = encoding.add_suffix(output_file, codec)
             self._logger.info("Saving the %s-compressed data as received, without decompressing it" % codec)
 
-        content_length = response.headers.get("Content-Length")
-        content_length = None if content_length is None else int(content_length)
+        content_length = self._announced_length(response)
         if content_length is None:
             self._logger.debug("No Content-Length in the response; reading until the end of the stream")
 
@@ -650,6 +649,10 @@ class RequestManager:
                     codec = encoding.content_encoding_codec(
                         response.headers.get("Content-Encoding"), situation=situation
                     )
+                    # The decoder is rebuilt for the body that is being served
+                    # now, and so is the total it is measured against: this
+                    # response may be longer or shorter than the first one.
+                    content_length = self._announced_length(response)
                     decoder, wire_received, decoded_written = self._restart_download(
                         output_handler, pbar, base_size, codec, decompress, content_length
                     )
@@ -673,6 +676,11 @@ class RequestManager:
 
         self._logger.info("Data saved successfully into " + output_file)
         return output_file
+
+    def _announced_length(self, response):
+        """The number of wire bytes a response announces, or None when unknown."""
+        value = response.headers.get("Content-Length")
+        return None if value is None else int(value)
 
     def _iter_wire(self, response, codec, situation):
         """Iterate over the bytes of the body as they arrive on the wire.

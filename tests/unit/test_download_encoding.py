@@ -93,6 +93,8 @@ class Spec:
         content_type="application/prs.coverage+json",
         status=None,
         encode_per_accept_encoding=False,
+        restart_payload=None,
+        restart_content_encoding=None,
     ):
         self.payload = payload
         self.content_encoding = content_encoding
@@ -106,6 +108,10 @@ class Spec:
         #: Compress every body with the best codec the client advertised, the
         #: way the Polytope frontend's compression layer does.
         self.encode_per_accept_encoding = encode_per_accept_encoding
+        #: Body served to every request after the first one, for a server that
+        #: answers a Range with a different object than it first announced.
+        self.restart_payload = restart_payload
+        self.restart_content_encoding = restart_content_encoding
 
 
 class RecordingServer(ThreadingHTTPServer):
@@ -151,25 +157,31 @@ class Handler(BaseHTTPRequestHandler):
         first_get = len([item for item in server.received if item["method"] == "get"]) == 1
         drop_after = spec.drop_after if first_get else None
 
+        payload = spec.payload
+        content_encoding = spec.content_encoding
+        if not first_get and spec.restart_payload is not None:
+            payload = spec.restart_payload
+            content_encoding = spec.restart_content_encoding
+
         start = 0
         partial = False
         requested_range = self.headers.get("Range")
         if requested_range and spec.honour_range:
             start = _range_start(requested_range)
             partial = True
-        body = spec.payload[start:]
+        body = payload[start:]
 
         self.send_response(spec.status or (206 if partial else 200))
         self.send_header("Content-Type", spec.content_type)
-        if spec.content_encoding:
-            self.send_header("Content-Encoding", spec.content_encoding)
+        if content_encoding:
+            self.send_header("Content-Encoding", content_encoding)
         self.send_header("Accept-Ranges", "bytes")
         if spec.content_length:
             self.send_header("Content-Length", str(len(body)))
             if partial:
                 self.send_header(
                     "Content-Range",
-                    "bytes %d-%d/%d" % (start, len(spec.payload) - 1, len(spec.payload)),
+                    "bytes %d-%d/%d" % (start, len(payload) - 1, len(payload)),
                 )
             self.end_headers()
             self.wfile.write(body if drop_after is None else body[:drop_after])
@@ -418,6 +430,31 @@ def test_resume_restarts_when_the_server_ignores_the_range(server, tmp_path, cod
     # The Range was ignored (200), so the decoder was rebuilt and the partial
     # output discarded.
     assert decoders == [codec, codec]
+
+
+@pytest.mark.parametrize("append", [False, True])
+def test_reset_adopts_the_content_length_of_the_new_response(server, tmp_path, append):
+    """The 200 that ignores the Range may serve a body of a different length."""
+    compressed = encode(BODY, encoding.GZIP)
+    assert len(compressed) != len(BODY)
+    server.spec = Spec(
+        compressed,
+        content_encoding="gzip",
+        drop_after=len(compressed) // 3,
+        honour_range=False,
+        restart_payload=BODY,
+        restart_content_encoding=None,
+    )
+
+    output_file = str(tmp_path / "result.covjson")
+    prefix = b"already here\n"
+    if append:
+        Path(output_file).write_bytes(prefix)
+
+    result = manager()._download_to_file(get(server), output_file, append=append)
+
+    assert Path(result).read_bytes() == (prefix + BODY if append else BODY)
+    assert len(server.received) == 2
 
 
 @pytest.mark.parametrize("codec", CODECS)
