@@ -139,7 +139,7 @@ A Polytope server may compress a result and serve it with a `Content-Encoding`. 
 | Option | Values | Default | Meaning |
 | --- | --- | --- | --- |
 | `compression` | `auto`, `none`, `gzip`, `zstd` | `auto` | Codec advertised to the server. `auto` offers the best codec this client can decode: `zstd, gzip` when the installed `urllib3` can decode zstd, `gzip` otherwise. `none` asks for uncompressed data. The codec a result is stored with is settled when the request is submitted, and an asynchronous `Result` remembers it so that its `download()` asks for the same one. |
-| `decompress` | `True`, `False` | `True` | Whether to decompress the result while downloading it. With `False` the compressed stream is saved as received and `.gz` or `.zst` is appended to the output file name. |
+| `decompress` | `True`, `False` | `True` | Whether to decompress the result while downloading it. With `False` the compressed stream is saved as received and the suffix of the codec the server used (`.gz` or `.zst`) is appended to the output file name; a result that was not compressed keeps the name asked for. |
 
 Both can be set per client, per call, in the configuration file, or through the environment:
 
@@ -148,7 +148,7 @@ from polytope.api import Client
 
 c = Client(compression='zstd')                       # for every request of this client
 c.retrieve('ecmwf-mars', request, 'output.grib', compression = 'none')
-c.retrieve('ecmwf-mars', request, 'output.covjson', decompress = False)  # writes output.covjson.zst
+c.retrieve('ecmwf-mars', request, 'output.covjson', decompress = False)  # writes output.covjson.gz or .zst
 ```
 
 ```yaml
@@ -159,7 +159,7 @@ decompress: true
 ```bash
 export POLYTOPE_COMPRESSION=zstd
 export POLYTOPE_DECOMPRESS=False
-polytope retrieve mars request.yaml output.grib --compression gzip --no-decompress
+polytope retrieve mars request.yaml output.grib --compression gzip --no-decompress  # writes output.grib.gz
 ```
 
 zstd support is an optional dependency:
