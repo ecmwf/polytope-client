@@ -582,7 +582,7 @@ def read_config(config_path):
     return found_config
 
 
-def process_response(response, situation, url, method, stream, request_content, expected):
+def process_response(response, situation, url, method, stream, request_content, expected, result_body=False):
     # This function ingests an HTTP response (as yield by the 'requests' python
     # module) and performs common checks and operations needed for all responses
     # received by the Polytope client. Returns a 'title' with the kind of response
@@ -611,10 +611,12 @@ def process_response(response, situation, url, method, stream, request_content, 
     content_type = response.headers.get("Content-Type")
     # The body of a result is left untouched on the wire: reading it here would
     # buffer (and decode) the whole download, and the streaming downloader would
-    # find nothing left to read.
-    is_result_body = content_type == "application/x-grib" or (
-        stream and response.status_code < 400 and content_type in RESULT_CONTENT_TYPES
-    )
+    # find nothing left to read. The caller says so for the requests it makes to
+    # download a result, because a result store labels those bodies as it likes
+    # ('binary/octet-stream' from MinIO, 'application/xml' for an error); the
+    # content types are what the generic path has to go by.
+    is_result_body = (result_body and 200 <= response.status_code < 300) or content_type == "application/x-grib"
+    is_result_body = is_result_body or (stream and response.status_code < 400 and content_type in RESULT_CONTENT_TYPES)
     if is_result_body:
         message = "**skipped**"
         content_length = response.headers.get("Content-Length")
@@ -663,7 +665,15 @@ def process_response(response, situation, url, method, stream, request_content, 
     return response_title, response_messages
 
 
-def try_request(method, situation, expected, logger, stream=False, skip_tls=False, session=None, **kwargs):
+def try_request(
+    method, situation, expected, logger, stream=False, skip_tls=False, session=None, result_body=False, **kwargs
+):
+    """Make an HTTP request and pre-process the response.
+
+    'result_body' marks a request whose successful response is the body of a
+    result, to be read by the caller instead of here, whatever Content-Type the
+    result store labels it with.
+    """
     url = kwargs.get("url", None)
     verify = not skip_tls
     kwargs["headers"] = with_default_headers(kwargs.get("headers"))
@@ -733,7 +743,7 @@ def try_request(method, situation, expected, logger, stream=False, skip_tls=Fals
         raise e
 
     response_title, response_messages = process_response(
-        response, situation, url, method, stream, request_content, expected
+        response, situation, url, method, stream, request_content, expected, result_body=result_body
     )
 
     logger.debug("Polytope client received HTTP " + str(response_title))

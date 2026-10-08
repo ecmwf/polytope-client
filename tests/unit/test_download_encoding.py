@@ -96,6 +96,7 @@ class Spec:
         restart_payload=None,
         restart_content_encoding=None,
         misplaced_range=False,
+        resumed_content_type=None,
     ):
         self.payload = payload
         self.content_encoding = content_encoding
@@ -116,6 +117,9 @@ class Spec:
         #: Answer a Range with a 206 that carries the whole object, the way a
         #: store that acknowledges the range but ignores its offset would.
         self.misplaced_range = misplaced_range
+        #: Content-Type of every response after the first one, for a store that
+        #: labels the bytes of a result with something of its own.
+        self.resumed_content_type = resumed_content_type
 
 
 class RecordingServer(ThreadingHTTPServer):
@@ -163,9 +167,13 @@ class Handler(BaseHTTPRequestHandler):
 
         payload = spec.payload
         content_encoding = spec.content_encoding
-        if not first_get and spec.restart_payload is not None:
-            payload = spec.restart_payload
-            content_encoding = spec.restart_content_encoding
+        content_type = spec.content_type
+        if not first_get:
+            if spec.restart_payload is not None:
+                payload = spec.restart_payload
+                content_encoding = spec.restart_content_encoding
+            if spec.resumed_content_type is not None:
+                content_type = spec.resumed_content_type
 
         start = 0
         partial = False
@@ -176,7 +184,7 @@ class Handler(BaseHTTPRequestHandler):
         body = payload[start:]
 
         self.send_response(spec.status or (206 if partial else 200))
-        self.send_header("Content-Type", spec.content_type)
+        self.send_header("Content-Type", content_type)
         if content_encoding:
             self.send_header("Content-Encoding", content_encoding)
         self.send_header("Accept-Ranges", "bytes")
@@ -403,6 +411,25 @@ def test_resume_keeps_the_decoder_state(server, tmp_path, codec, monkeypatch):
     assert server.received[1]["range"] == "bytes=%d-" % (len(payload) // 3)
     # The decoder was built once and kept its state across the resume.
     assert decoders == [codec]
+
+
+@pytest.mark.parametrize("resumed_type", ["binary/octet-stream", "application/xml", "application/x-grib"])
+def test_resume_whose_response_is_not_labelled_as_a_result(server, tmp_path, resumed_type):
+    """A result store labels the bytes it serves with a content type of its own."""
+    payload = encode(BODY, encoding.GZIP)
+    server.spec = Spec(
+        payload,
+        content_encoding="gzip",
+        content_type="application/x-grib",
+        drop_after=len(payload) // 3,
+        resumed_content_type=resumed_type,
+    )
+
+    output_file = str(tmp_path / "result.grib")
+    result = manager()._download_to_file(get(server), output_file, append=False)
+
+    assert Path(result).read_bytes() == BODY
+    assert len(server.received) == 2
 
 
 @pytest.mark.parametrize("codec", CODECS)

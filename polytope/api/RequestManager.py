@@ -651,6 +651,7 @@ class RequestManager:
                     url=url,
                     headers=headers,
                     skip_tls=self.config.get()["skip_tls"],
+                    result_body=True,
                 )
 
                 if resuming and not self._range_honoured(response, wire_received, content_length):
