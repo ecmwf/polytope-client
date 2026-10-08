@@ -904,6 +904,47 @@ def test_compression_option_reaches_the_submit_and_download_requests(monkeypatch
     assert [headers["Accept-Encoding"] for _, headers in captured] == ["identity", "identity", "gzip"]
 
 
+def test_result_download_asks_for_the_submitted_codec(monkeypatch, tmp_path):
+    """An asynchronous retrieve settled the codec; its download must ask for it."""
+    captured = []
+
+    class Response:
+        status_code = requests.codes.accepted
+        headers = {"Location": "http://example.test/api/v1/requests/req-1"}
+        url = "http://example.test/api/v1/requests/req-1"
+
+        def json(self):
+            return {"message": "ok"}
+
+        def close(self):
+            pass
+
+    def fake_try_request(*args, **kwargs):
+        captured.append(kwargs.get("headers", {}).get("Accept-Encoding"))
+        if kwargs.get("situation") == "trying to download data":
+            response = Response()
+            response.status_code = requests.codes.ok
+            response.headers = {"Content-Length": "0", "Content-Type": "application/x-grib"}
+            return response, {}
+        return Response(), {"message": "ok"}
+
+    monkeypatch.setattr(helpers, "try_request", fake_try_request)
+    client = Client(
+        config_path=tmp_path,
+        address="http://example.test",
+        insecure=True,
+        user_key="token",
+        quiet=True,
+    )
+
+    results = client.retrieve("ecmwf-mars", {"param": "t"}, asynchronous=True, compression="none")
+    assert results[0].compression == "none"
+    results[0].download(pointer=True)
+
+    # The submit and the download of the result, not the 'auto' default.
+    assert captured == ["identity", "identity"]
+
+
 def test_pointer_closes_the_unread_result_body(monkeypatch, tmp_path):
     """Nothing reads the body of the result, so the connection is let go."""
     closed = []

@@ -486,7 +486,9 @@ class RequestManager:
                     )
                     if warning not in warnings:
                         warnings.append(warning)
-                request_results[i] = Result(request_url, output_file, append, self, decompress=decompress)
+                request_results[i] = Result(
+                    request_url, output_file, append, self, decompress=decompress, compression=compression
+                )
             else:
                 request_results[i] = self.download(
                     request_id,
@@ -947,9 +949,10 @@ class RequestManager:
         :param compression: Codec advertised to the server: 'auto' (default;
         the best codec this client can decode), 'none', 'gzip' or 'zstd'
         ('zstd' needs an urllib3 that can decode zstd; see the 'zstd' extra).
-        The codec of a result is fixed when the request is submitted, so this
-        only has an effect on the request that submitted the data. Defaults to
-        the value of the 'compression' configuration item.
+        The codec a result is stored with is settled when the request is
+        submitted, so this is the codec that submission asked for; a server
+        that compresses responses as it serves them honours it here too.
+        Defaults to the value of the 'compression' configuration item.
         :type compression: str
         :param decompress: Whether to decompress the result while downloading
         it (True; default) or to save the compressed stream as received, with a
