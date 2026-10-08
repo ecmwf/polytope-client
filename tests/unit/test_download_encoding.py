@@ -101,12 +101,25 @@ class RecordingServer(ThreadingHTTPServer):
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
+    def do_POST(self):
+        """Accept a request submission the way the Polytope frontend does."""
+        server = cast(RecordingServer, self.server)
+        self.rfile.read(_content_length(self.headers))
+        self._record("post")
+        body = b'{"message": "queued", "status": "queued"}'
+        self.send_response(202)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Location", "http://127.0.0.1:%d/api/v1/requests/req-1" % server.server_port)
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         server = cast(RecordingServer, self.server)
         spec = server.spec
-        server.received.append({name.lower(): value for name, value in self.headers.items()})
-        first_request = len(server.received) == 1
-        drop_after = spec.drop_after if first_request else None
+        self._record("get")
+        first_get = len([item for item in server.received if item["method"] == "get"]) == 1
+        drop_after = spec.drop_after if first_get else None
 
         start = 0
         partial = False
@@ -137,6 +150,11 @@ class Handler(BaseHTTPRequestHandler):
         if drop_after is not None:
             self.close_connection = True
 
+    def _record(self, method):
+        headers = {name.lower(): value for name, value in self.headers.items()}
+        headers["method"] = method
+        cast(RecordingServer, self.server).received.append(headers)
+
     def _write_chunked(self, body, drop_after):
         limit = len(body) if drop_after is None else drop_after
         written = 0
@@ -155,6 +173,13 @@ def _range_start(value):
     try:
         return int(value.split("=", 1)[1].split("-")[0])
     except (IndexError, ValueError):
+        return 0
+
+
+def _content_length(headers):
+    try:
+        return int(headers.get("Content-Length") or 0)
+    except ValueError:
         return 0
 
 
@@ -581,3 +606,36 @@ def test_gzip_multiple_members():
     decoder = encoding.make_decoder(encoding.GZIP)
     assert decoder.decompress(stream) == b"first second"
     assert decoder.eof
+
+
+# End to end through the Client
+###
+
+
+@pytest.mark.parametrize("codec", CODECS)
+def test_retrieve_submits_and_downloads_an_encoded_result(server, tmp_path, codec):
+    """Submit, poll and download through the public API, server and all."""
+    skip_unless_available(codec)
+    server.spec = Spec(encode(BODY, codec), content_encoding=None if codec == encoding.IDENTITY else codec)
+
+    client = Client(
+        config_path=tmp_path / "config",
+        address="http://127.0.0.1:%d" % server.server_port,
+        insecure=True,
+        user_key="token",
+        quiet=True,
+    )
+    output_file = str(tmp_path / "result.covjson")
+    results = client.retrieve(
+        "ecmwf-mars",
+        {"param": "t"},
+        output_file,
+        compression="gzip" if codec == encoding.IDENTITY else codec,
+    )
+
+    assert results == [output_file]
+    assert Path(output_file).read_bytes() == BODY
+    submit = server.received[0]
+    assert submit["method"] == "post"
+    assert submit["accept-encoding"] == ("gzip" if codec == encoding.IDENTITY else codec)
+    assert submit["user-agent"].startswith("polytope-client/")
