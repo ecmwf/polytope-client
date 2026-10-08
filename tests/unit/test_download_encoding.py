@@ -97,6 +97,7 @@ class Spec:
         restart_content_encoding=None,
         misplaced_range=False,
         resumed_content_type=None,
+        duplicate_content_length=False,
     ):
         self.payload = payload
         self.content_encoding = content_encoding
@@ -120,6 +121,8 @@ class Spec:
         #: Content-Type of every response after the first one, for a store that
         #: labels the bytes of a result with something of its own.
         self.resumed_content_type = resumed_content_type
+        #: Send Content-Length twice, which 'requests' joins with a comma.
+        self.duplicate_content_length = duplicate_content_length
 
 
 class RecordingServer(ThreadingHTTPServer):
@@ -190,6 +193,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Accept-Ranges", "bytes")
         if spec.content_length:
             self.send_header("Content-Length", str(len(body)))
+            if spec.duplicate_content_length:
+                self.send_header("Content-Length", str(len(body)))
             if partial:
                 self.send_header(
                     "Content-Range",
@@ -551,7 +556,15 @@ def test_complete_body_then_a_connection_error_is_a_success(server, tmp_path, co
     assert len(server.received) == 1
 
 
-@pytest.mark.parametrize("error", [requests.exceptions.ConnectionError, urllib3.exceptions.ProtocolError])
+@pytest.mark.parametrize(
+    "error",
+    [
+        requests.exceptions.ConnectionError,
+        requests.exceptions.SSLError,
+        urllib3.exceptions.ProtocolError,
+        urllib3.exceptions.SSLError,
+    ],
+)
 def test_connection_error_without_a_content_length_is_retried(server, tmp_path, error):
     """Nothing announced the length, so the body may well have been cut short."""
     server.spec = Spec(BODY, content_length=False)
@@ -564,6 +577,19 @@ def test_connection_error_without_a_content_length_is_retried(server, tmp_path, 
     assert Path(result).read_bytes() == BODY
     assert len(server.received) == 2
     assert "range" not in server.received[1]
+
+
+def test_duplicated_content_length_is_treated_as_unknown(server, tmp_path, caplog):
+    """'requests' joins repeated headers with a comma, which is not a number."""
+    payload = encode(BODY, encoding.GZIP)
+    server.spec = Spec(payload, content_encoding="gzip", duplicate_content_length=True)
+
+    output_file = str(tmp_path / "result.covjson")
+    with caplog.at_level(logging.WARNING, logger=LOGGER.name):
+        result = manager()._download_to_file(get(server), output_file, append=False)
+
+    assert Path(result).read_bytes() == BODY
+    assert any("Content-Length" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.parametrize("codec", [encoding.GZIP, encoding.ZSTD])
@@ -876,6 +902,36 @@ def test_compression_option_reaches_the_submit_and_download_requests(monkeypatch
     client.download("req-1", pointer=True, compression="gzip")
 
     assert [headers["Accept-Encoding"] for _, headers in captured] == ["identity", "identity", "gzip"]
+
+
+def test_pointer_closes_the_unread_result_body(monkeypatch, tmp_path):
+    """Nothing reads the body of the result, so the connection is let go."""
+    closed = []
+
+    class Response:
+        status_code = requests.codes.ok
+        headers = {"Content-Length": "7", "Content-Type": "application/x-grib"}
+        url = "https://example.test/api/v1/downloads/req-1"
+
+        def json(self):
+            return {"message": "ok"}
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(helpers, "try_request", lambda *args, **kwargs: (Response(), {}))
+    client = Client(
+        config_path=tmp_path,
+        address="http://example.test",
+        insecure=True,
+        user_key="token",
+        quiet=True,
+    )
+
+    result = client.download("req-1", pointer=True)
+
+    assert result["contentLength"] == "7"
+    assert closed == [True]
 
 
 # Configuration

@@ -40,9 +40,13 @@ from .Result import Result
 DOWNLOAD_INTERRUPTIONS = (
     requests.exceptions.ChunkedEncodingError,
     requests.exceptions.ConnectionError,
+    requests.exceptions.SSLError,
     requests.exceptions.Timeout,
     urllib3.exceptions.ProtocolError,
     urllib3.exceptions.ReadTimeoutError,
+    # A TLS record that arrives broken or a session that is renegotiated away
+    # mid-body: urllib3 raises this one outside the ProtocolError hierarchy.
+    urllib3.exceptions.SSLError,
     ConnectionError,
 )
 
@@ -696,9 +700,26 @@ class RequestManager:
         return output_file
 
     def _announced_length(self, response):
-        """The number of wire bytes a response announces, or None when unknown."""
+        """The number of wire bytes a response announces, or None when unknown.
+
+        A malformed Content-Length, or several of them (which 'requests' hands
+        over joined by commas), says nothing usable about the body, so the
+        download runs to the end of the stream instead.
+        """
         value = response.headers.get("Content-Length")
-        return None if value is None else int(value)
+        if value is None:
+            return None
+        try:
+            length = int(str(value).strip())
+        except ValueError:
+            length = -1
+        if length < 0:
+            self._logger.warning(
+                "The server announced a Content-Length of '%s', which is not a byte count; " % value
+                + "reading until the end of the stream instead"
+            )
+            return None
+        return length
 
     def _range_honoured(self, response, wire_received, content_length):
         """Whether a response continues the download at the wire byte asked for.
@@ -851,6 +872,9 @@ class RequestManager:
         elif content_type == "application/octet-stream":
             if output_file:
                 return self._download_to_file(response, output_file, append, decompress=decompress)
+            # No file to write to, so the caller gets the data itself: 'requests'
+            # buffers the whole body in memory and decodes any Content-Encoding
+            # on the way, which is why nothing is streamed or resumed here.
             return response.content
         elif content_type == "application/x-grib":
             if not output_file:
@@ -1015,6 +1039,9 @@ class RequestManager:
                 "contentLength": response.headers.get("Content-Length"),
                 "contentType": response.headers.get("Content-Type"),
             }
+            # The body of the result was left on the wire for the downloader
+            # that is not going to run: give the connection back to the pool.
+            response.close()
             if self.config._cli:
                 print(pprint.pformat(result))
             return result
