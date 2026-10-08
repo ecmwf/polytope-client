@@ -514,13 +514,13 @@ class RequestManager:
     def _download_to_file(self, response, output_file, append, decompress=True):
         """Stream the body of 'response' into 'output_file'.
 
-        The bytes are read as they arrive on the wire (undecoded) and, unless
+        The bytes are counted as received, before decoding, and, unless
         'decompress' is False, fed through a streaming decoder owned by this
-        method. The wire byte count is what Content-Length announces and what
-        byte ranges address when the body carries a Content-Encoding, so it is
-        also what drives the progress bar, a resumed request and the
-        completeness check. The decoder keeps its state across a resume, which
-        is why no temporary file is needed.
+        method. That count is what Content-Length announces and what byte
+        ranges address when the body carries a Content-Encoding, so it is also
+        what drives the progress bar, a resumed request and the completeness
+        check. The decoder keeps its state across a resume, which is why no
+        temporary file is needed.
         """
         situation = "trying to download data"
         output_file = os.path.abspath(os.path.expanduser(output_file))
@@ -529,14 +529,14 @@ class RequestManager:
         buffered = getattr(response, "_content", None)
         if isinstance(buffered, (bytes, bytearray)):
             # The whole body was already read (and decoded) by the HTTP
-            # library, so there is nothing left on the wire to stream.
+            # library, so there is nothing left to stream.
             return self._write_buffered_body(bytes(buffered), output_file, append, codec, decompress)
 
         if not decompress and codec != encoding.IDENTITY:
             output_file = encoding.add_suffix(output_file, codec)
             self._logger.info("Saving the %s-compressed data as received, without decompressing it" % codec)
 
-        content_length = self._announced_length(response)
+        content_length = self._content_length(response)
         if content_length is None:
             self._logger.debug("No Content-Length in the response; reading until the end of the stream")
 
@@ -545,7 +545,7 @@ class RequestManager:
         mode = "ab" if append else "wb"
         base_size = os.path.getsize(output_file) if append and os.path.exists(output_file) else 0
         decoder = encoding.make_decoder(codec) if decompress else None
-        wire_received = 0
+        received_bytes = 0
         decoded_written = 0
         attempts = 1
         http_max_attempts = self._http_max_attempts
@@ -562,10 +562,10 @@ class RequestManager:
             while True:
                 interruption = None
                 try:
-                    for chunk in self._iter_wire(response, codec, situation):
+                    for chunk in self._iter_received(response, codec, situation):
                         if not chunk:
                             continue
-                        wire_received += len(chunk)
+                        received_bytes += len(chunk)
                         if decoder is None:
                             output_handler.write(chunk)
                             decoded_written += len(chunk)
@@ -582,10 +582,10 @@ class RequestManager:
                 finally:
                     response.close()
 
-                if content_length is not None and wire_received > content_length:
+                if content_length is not None and received_bytes > content_length:
                     e = helpers.PolytopeError(situation)
-                    e.description = "Download failed: received %s byte(s) but the server announced %s" % (
-                        wire_received,
+                    e.description = "Download failed: received %s of %s bytes (Content-Length)" % (
+                        received_bytes,
                         content_length,
                     )
                     raise e
@@ -595,9 +595,9 @@ class RequestManager:
                 # down) says nothing about the data. Without a Content-Length
                 # there is nothing to verify the body against and an interruption
                 # must not be ignored.
-                verified = content_length is not None and wire_received == content_length
+                verified = content_length is not None and received_bytes == content_length
                 if (interruption is None or verified) and self._download_complete(
-                    decoder, wire_received, content_length
+                    decoder, received_bytes, content_length
                 ):
                     if decoder is not None:
                         tail = self._decode(decoder, b"", situation, flush=True)
@@ -613,22 +613,18 @@ class RequestManager:
                 # any differently.
                 if verified and decoder is not None and decoder.verifies_end_of_stream and not decoder.eof:
                     e = helpers.PolytopeError(situation)
-                    e.description = (
-                        "Download failed: incomplete %s stream: the server announced %s byte(s) and all of them "
-                        "arrived, but the stream has no end marker" % (decoder.codec, content_length)
+                    e.description = "Download failed: all %s bytes received but the %s stream has no end marker" % (
+                        content_length,
+                        decoder.codec,
                     )
                     raise e
-
-                self._logger.warning(
-                    "Download incomplete, received %s byte(s) out of %s"
-                    % (wire_received, "unknown" if content_length is None else content_length)
-                )
 
                 method = response.request.method.lower()
                 url = response.request.url
                 headers = dict(response.request.headers)
 
                 attempts += 1
+
                 if attempts > http_max_attempts:
                     e = helpers.GivenUpDownloadError(
                         situation=situation,
@@ -639,19 +635,32 @@ class RequestManager:
                     )
                     raise e
 
-                self._logger.warning("Sleeping %s seconds" % new_attempt_period)
+                self._logger.warning(
+                    "Download interrupted after %s of %s bytes; retrying in %s s"
+                    % (
+                        received_bytes,
+                        "unknown" if content_length is None else content_length,
+                        new_attempt_period,
+                    )
+                )
                 time.sleep(new_attempt_period)
 
-                # Byte ranges address the bytes on the wire, which are the
+                # Byte ranges address the bytes as received, which are the
                 # compressed ones when the body carries a Content-Encoding.
-                resuming = content_length is not None and wire_received > 0
+                resuming = content_length is not None and received_bytes > 0
                 if resuming:
-                    headers["Range"] = "bytes=%d-" % wire_received
-                    self._logger.warning("Resuming download at wire byte %s" % wire_received)
+                    headers["Range"] = "bytes=%d-" % received_bytes
+                    if codec == encoding.IDENTITY:
+                        self._logger.warning("Resuming download from byte %s of %s" % (received_bytes, content_length))
+                    else:
+                        self._logger.warning(
+                            "Resuming download from byte %s of %s of the compressed stream"
+                            % (received_bytes, content_length)
+                        )
                 else:
                     headers.pop("Range", None)
                     self._logger.warning("Restarting the download from the beginning")
-                    decoder, wire_received, decoded_written = self._restart_download(
+                    decoder, received_bytes, decoded_written = self._restart_download(
                         output_handler, pbar, base_size, codec, decompress, content_length
                     )
 
@@ -667,7 +676,7 @@ class RequestManager:
                     result_body=True,
                 )
 
-                if resuming and not self._range_honoured(response, wire_received, content_length):
+                if resuming and not self._range_honoured(response, received_bytes, content_length):
                     self._logger.warning(
                         "The server did not continue the data where the Range asked it to; "
                         + "discarding the %s byte(s) already written" % decoded_written
@@ -678,33 +687,33 @@ class RequestManager:
                     # The decoder is rebuilt for the body that is being served
                     # now, and so is the total it is measured against: this
                     # response may be longer or shorter than the first one.
-                    content_length = self._announced_length(response)
-                    decoder, wire_received, decoded_written = self._restart_download(
+                    content_length = self._content_length(response)
+                    decoder, received_bytes, decoded_written = self._restart_download(
                         output_handler, pbar, base_size, codec, decompress, content_length
                     )
 
         elapsed = time.time() - start
         if decompress and codec != encoding.IDENTITY:
-            ratio = (float(decoded_written) / wire_received) if wire_received else 0.0
+            ratio = (float(decoded_written) / received_bytes) if received_bytes else 0.0
             self._logger.info(
-                "Wrote %s of data, decoded from %s of %s on the wire (%.2fx)"
+                "Data saved: %s (received %s, %s, compression ratio %.2f)"
                 % (
                     helpers.bytes_to_string(decoded_written),
-                    helpers.bytes_to_string(wire_received),
+                    helpers.bytes_to_string(received_bytes),
                     codec,
                     ratio,
                 )
             )
         else:
-            self._logger.info("Wrote %s of data" % helpers.bytes_to_string(decoded_written))
+            self._logger.info("Data saved: %s" % helpers.bytes_to_string(decoded_written))
         if elapsed:
-            self._logger.info("Download rate %s/s" % helpers.bytes_to_string(wire_received / elapsed))
+            self._logger.info("Download rate %s/s (received bytes)" % helpers.bytes_to_string(received_bytes / elapsed))
 
         self._logger.info("Data saved successfully into " + output_file)
         return output_file
 
-    def _announced_length(self, response):
-        """The number of wire bytes a response announces, or None when unknown.
+    def _content_length(self, response):
+        """The number of bytes a response announces, as received, or None when unknown.
 
         A malformed Content-Length, or several of them (which 'requests' hands
         over joined by commas), says nothing usable about the body, so the
@@ -725,8 +734,8 @@ class RequestManager:
             return None
         return length
 
-    def _range_honoured(self, response, wire_received, content_length):
-        """Whether a response continues the download at the wire byte asked for.
+    def _range_honoured(self, response, received_bytes, content_length):
+        """Whether a response continues the download at the byte asked for.
 
         A 206 is only a continuation of what was already written when its
         Content-Range says so: a store that answers with the whole object, or
@@ -743,9 +752,9 @@ class RequestManager:
             )
             return False
         start, total = parsed
-        if start != wire_received:
+        if start != received_bytes:
             self._logger.warning(
-                "The server answered the Range request at wire byte %s with the bytes from %s" % (wire_received, start)
+                "The server answered the Range request at byte %s with the bytes from %s" % (received_bytes, start)
             )
             return False
         if total is not None and content_length is not None and total != content_length:
@@ -781,8 +790,8 @@ class RequestManager:
         except ValueError:
             return start, None
 
-    def _iter_wire(self, response, codec, situation):
-        """Iterate over the bytes of the body as they arrive on the wire.
+    def _iter_received(self, response, codec, situation):
+        """Iterate over the bytes of the body as received, before decoding.
 
         'requests' decodes Content-Encoding transparently in iter_content(), so
         the raw urllib3 stream with decode_content=False is the only way to see
@@ -798,7 +807,7 @@ class RequestManager:
         return response.iter_content(chunk_size=self._download_chunk_size)
 
     def _decode_pieces(self, decoder, chunk, situation):
-        """Yield the decoded slices of one wire chunk, one write at a time."""
+        """Yield the decoded slices of one received chunk, one write at a time."""
         pieces = decoder.pieces(chunk)
         while True:
             try:
@@ -825,8 +834,8 @@ class RequestManager:
         return e
 
     @staticmethod
-    def _download_complete(decoder, wire_received, content_length):
-        if content_length is not None and wire_received != content_length:
+    def _download_complete(decoder, received_bytes, content_length):
+        if content_length is not None and received_bytes != content_length:
             return False
         if decoder is not None and decoder.verifies_end_of_stream and not decoder.eof:
             return False
@@ -849,7 +858,7 @@ class RequestManager:
             )
         with open(output_file, "ab" if append else "wb") as output_handler:
             output_handler.write(body)
-        self._logger.info("Wrote %s of data" % helpers.bytes_to_string(len(body)))
+        self._logger.info("Data saved: %s" % helpers.bytes_to_string(len(body)))
         self._logger.info("Data saved successfully into " + output_file)
         return output_file
 
@@ -1046,7 +1055,7 @@ class RequestManager:
                 "contentLength": response.headers.get("Content-Length"),
                 "contentType": response.headers.get("Content-Type"),
             }
-            # The body of the result was left on the wire for the downloader
+            # The body of the result was left unread for the downloader
             # that is not going to run: give the connection back to the pool.
             response.close()
             if self.config._cli:

@@ -19,7 +19,7 @@
 """Downloads of results served with a Content-Encoding.
 
 The responses come from a real HTTP server in a thread, so that the client sees
-the same wire behaviour as it does against BOBS: Content-Length and byte ranges
+the same HTTP behaviour as it does against BOBS: Content-Length and byte ranges
 over the *compressed* bytes, and a connection that can break mid-body.
 """
 
@@ -363,7 +363,7 @@ def test_download_decodes_every_codec(server, tmp_path, codec, content_length):
 
 
 @pytest.mark.parametrize("codec", [encoding.GZIP, encoding.ZSTD])
-def test_progress_and_completeness_count_wire_bytes(server, tmp_path, codec, caplog):
+def test_progress_and_completeness_count_received_bytes(server, tmp_path, codec, caplog):
     skip_unless_available(codec)
     payload = encode(BODY, codec)
     assert len(payload) < len(BODY)
@@ -376,7 +376,7 @@ def test_progress_and_completeness_count_wire_bytes(server, tmp_path, codec, cap
     assert Path(output_file).read_bytes() == BODY
     # The completeness check compared the compressed bytes against
     # Content-Length; the decoded bytes are what reached the file.
-    written = [record.getMessage() for record in caplog.records if record.getMessage().startswith("Wrote ")]
+    written = [record.getMessage() for record in caplog.records if record.getMessage().startswith("Data saved: ")]
     assert len(written) == 1
     assert codec in written[0]
     assert helpers.bytes_to_string(len(payload)) in written[0]
@@ -858,7 +858,7 @@ def test_json_error_compressed_by_the_frontend_is_still_parsed(server, tmp_path)
     "compression,expected",
     [("none", "identity"), ("gzip", "gzip"), ("auto", None)],
 )
-def test_headers_sent_on_the_wire(server, compression, expected):
+def test_headers_sent_with_each_request(server, compression, expected):
     server.spec = Spec(b'{"message": "ok"}', content_type="application/json")
     expected = expected or encoding.accept_encoding_header("auto")
 

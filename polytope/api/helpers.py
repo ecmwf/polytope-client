@@ -628,7 +628,7 @@ def process_response(response, situation, url, method, stream, request_content, 
     response_title = response_type_str + " (" + str(response.status_code) + ")"
 
     content_type = response.headers.get("Content-Type")
-    # The body of a result is left untouched on the wire: reading it here would
+    # The body of a result is left unread here: reading it would
     # buffer (and decode) the whole download, and the streaming downloader would
     # find nothing left to read. The caller says so for the requests it makes to
     # download a result, because a result store labels those bodies as it likes
