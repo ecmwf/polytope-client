@@ -967,6 +967,37 @@ def test_gzip_multiple_members():
     assert decoder.eof
 
 
+@pytest.mark.parametrize("codec", [encoding.GZIP, encoding.ZSTD])
+def test_decoding_is_bounded_by_the_slice_size(codec, monkeypatch):
+    """A kilobyte of compressed zeros must not become a gigabyte in one call."""
+    skip_unless_available(codec)
+    body = b"\0" * (4 * 1024 * 1024)
+    monkeypatch.setattr(encoding, "MAX_DECODED_SLICE", 64 * 1024)
+    decoder = encoding.make_decoder(codec)
+
+    pieces = list(decoder.pieces(encode(body, codec)))
+
+    assert b"".join(pieces) == body
+    assert decoder.eof
+    if decoder.bounds_output:
+        assert max(len(piece) for piece in pieces) <= 64 * 1024
+
+
+@pytest.mark.parametrize("codec", [encoding.GZIP, encoding.ZSTD])
+def test_highly_compressible_body_is_written_identically(server, tmp_path, codec, monkeypatch):
+    skip_unless_available(codec)
+    body = b"\0" * (4 * 1024 * 1024)
+    payload = encode(body, codec)
+    assert len(payload) * 100 < len(body)
+    server.spec = Spec(payload, content_encoding=codec)
+    monkeypatch.setattr(encoding, "MAX_DECODED_SLICE", 64 * 1024)
+
+    output_file = str(tmp_path / "result.covjson")
+    result = manager()._download_to_file(get(server), output_file, append=False)
+
+    assert Path(result).read_bytes() == body
+
+
 # End to end through the Client
 ###
 

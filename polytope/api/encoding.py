@@ -52,6 +52,10 @@ GZIP_ALIASES = (GZIP, "x-gzip")
 #: File name suffix used when the compressed stream is kept as received.
 SUFFIXES = {GZIP: ".gz", ZSTD: ".zst"}
 
+#: Largest amount of data a decoder is asked to produce in one call, so that a
+#: single compressed chunk from the wire cannot expand into gigabytes of memory.
+MAX_DECODED_SLICE = 8 * 1024 * 1024
+
 #: Modules that provide a streaming zstd decompressor, in the order urllib3
 #: itself tries them: the standard library module (Python 3.14+), its backport,
 #: and the 'zstandard' package that urllib3 before 2.5 used.
@@ -240,6 +244,14 @@ class IdentityDecoder:
     #: Whether reaching the end of the codec's stream can be detected.
     verifies_end_of_stream = False
 
+    #: Whether a single call is guaranteed not to produce more than
+    #: MAX_DECODED_SLICE bytes of output.
+    bounds_output = True
+
+    def pieces(self, data):
+        if data:
+            yield data
+
     def decompress(self, data):
         return data
 
@@ -256,19 +268,29 @@ class GzipDecoder:
 
     codec = GZIP
     verifies_end_of_stream = True
+    bounds_output = True
 
     def __init__(self):
         self._obj = zlib.decompressobj(31)
 
-    def decompress(self, data):
-        out = []
+    def pieces(self, data):
+        """Decode 'data' into slices of at most MAX_DECODED_SLICE bytes."""
         while data:
             if self._obj.eof:
                 # A new gzip member follows the one just finished.
                 self._obj = zlib.decompressobj(31)
-            out.append(self._obj.decompress(data))
+            out = self._obj.decompress(data, MAX_DECODED_SLICE)
+            if out:
+                yield out
+            # What did not fit in the slice above waits in unconsumed_tail.
+            while self._obj.unconsumed_tail:
+                out = self._obj.decompress(self._obj.unconsumed_tail, MAX_DECODED_SLICE)
+                if out:
+                    yield out
             data = self._obj.unused_data if self._obj.eof else b""
-        return b"".join(out)
+
+    def decompress(self, data):
+        return b"".join(self.pieces(data))
 
     def flush(self):
         return self._obj.flush()
@@ -287,17 +309,40 @@ class ZstdDecoder:
     def __init__(self):
         self._new = zstd_decompressobj
         self._obj = self._new()
+        # compression.zstd and backports.zstd take a max_length and say whether
+        # they need more input; the decompressobj() of the 'zstandard' package
+        # takes neither, so with that backend what one call decodes is only
+        # bounded by how much the data expands.
+        self.bounds_output = hasattr(self._obj, "needs_input")
 
-    def decompress(self, data):
-        out = []
+    def pieces(self, data):
+        """Decode 'data', in slices of at most MAX_DECODED_SLICE bytes when the
+        backend allows it."""
         while data:
             if self._obj.eof:
                 # A new zstd frame follows the one just finished.
                 self._obj = self._new()
-            out.append(self._obj.decompress(data))
+            if self.bounds_output:
+                for piece in self._bounded_pieces(data):
+                    yield piece
+            else:
+                out = self._obj.decompress(data)
+                if out:
+                    yield out
             # Old versions of 'zstandard' do not expose unused_data at all.
             data = getattr(self._obj, "unused_data", b"") if self._obj.eof else b""
-        return b"".join(out)
+
+    def _bounded_pieces(self, data):
+        out = self._obj.decompress(data, MAX_DECODED_SLICE)
+        if out:
+            yield out
+        while not self._obj.needs_input and not self._obj.eof:
+            out = self._obj.decompress(b"", MAX_DECODED_SLICE)
+            if out:
+                yield out
+
+    def decompress(self, data):
+        return b"".join(self.pieces(data))
 
     def flush(self):
         return b""

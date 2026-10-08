@@ -558,10 +558,15 @@ class RequestManager:
                         if not chunk:
                             continue
                         wire_received += len(chunk)
-                        data = chunk if decoder is None else self._decode(decoder, chunk, situation)
-                        if data:
-                            output_handler.write(data)
-                            decoded_written += len(data)
+                        if decoder is None:
+                            output_handler.write(chunk)
+                            decoded_written += len(chunk)
+                        else:
+                            # One chunk of compressed bytes can decode to much
+                            # more than itself, so it is written in slices.
+                            for piece in self._decode_pieces(decoder, chunk, situation):
+                                output_handler.write(piece)
+                                decoded_written += len(piece)
                         pbar.update(len(chunk))
                 except DOWNLOAD_INTERRUPTIONS as error:
                     interruption = error
@@ -767,16 +772,32 @@ class RequestManager:
             raise e
         return response.iter_content(chunk_size=self._download_chunk_size)
 
+    def _decode_pieces(self, decoder, chunk, situation):
+        """Yield the decoded slices of one wire chunk, one write at a time."""
+        pieces = decoder.pieces(chunk)
+        while True:
+            try:
+                piece = next(pieces)
+            except StopIteration:
+                return
+            except Exception as error:
+                raise self._decode_error(decoder, error, situation) from error
+            yield piece
+
     def _decode(self, decoder, chunk, situation, flush=False):
         try:
             return decoder.flush() if flush else decoder.decompress(chunk)
         except Exception as error:
-            e = helpers.PolytopeError(situation)
-            e.description = "Download failed: the %s data received from the server could not be decoded (%s)" % (
-                decoder.codec,
-                error,
-            )
-            raise e from error
+            raise self._decode_error(decoder, error, situation) from error
+
+    @staticmethod
+    def _decode_error(decoder, error, situation):
+        e = helpers.PolytopeError(situation)
+        e.description = "Download failed: the %s data received from the server could not be decoded (%s)" % (
+            decoder.codec,
+            error,
+        )
+        return e
 
     @staticmethod
     def _download_complete(decoder, wire_received, content_length):
