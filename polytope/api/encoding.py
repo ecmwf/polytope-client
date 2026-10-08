@@ -78,6 +78,11 @@ def _urllib3_version():
 def zstd_hint():
     """How to give the installed urllib3 a zstd decoder."""
     version = _urllib3_version()
+    if version and version < (2, 0):
+        return (
+            "upgrade to urllib3 2.5 or later and install the 'backports.zstd' package "
+            "(pip install 'polytope-client[zstd]'), since this urllib3 cannot decode zstd at all"
+        )
     if version and version < (2, 5):
         return "install the 'zstandard' package, which this urllib3 decodes zstd with"
     if sys.version_info >= (3, 14):
@@ -109,9 +114,9 @@ def zstd_decoder_available():
 def zstd_decompressobj():
     """Return a streaming zstd decompressor for a single frame.
 
-    Every backend exposes ``decompress(data)``, ``eof`` and ``unused_data``;
-    the standard library one also takes a ``max_length``, which is not used
-    here.
+    Every backend exposes ``decompress(data)`` and ``eof``; the standard library
+    one and its backport also take a ``max_length`` and expose ``needs_input``,
+    which is what bounds how much a single call may produce.
     """
     module = zstd_module()
     if module is None:
@@ -128,10 +133,17 @@ def zstd_available():
     a submission, a poll, an error) is decoded by urllib3 before the client
     sees it, so advertising a codec urllib3 cannot decode turns those bodies
     into undecodable bytes. urllib3 therefore has the last word, whatever this
-    module could decode: ``urllib3.response.HAS_ZSTD`` says whether it found a
-    zstd decoder of its own.
+    module could decode, and ``BaseHTTPResponse.CONTENT_DECODERS`` is the list
+    urllib3 itself consults: ``HAS_ZSTD`` is absent on urllib3 2.0 and 2.1,
+    which do decode zstd (through the 'zstandard' package), and on 1.26, which
+    does not.
     """
     urllib3_response = _import("urllib3.response")
+    if urllib3_response is None:
+        return False
+    decoders = getattr(getattr(urllib3_response, "BaseHTTPResponse", None), "CONTENT_DECODERS", None)
+    if decoders is not None:
+        return ZSTD in decoders
     return bool(getattr(urllib3_response, "HAS_ZSTD", False))
 
 
@@ -283,7 +295,8 @@ class ZstdDecoder:
                 # A new zstd frame follows the one just finished.
                 self._obj = self._new()
             out.append(self._obj.decompress(data))
-            data = self._obj.unused_data if self._obj.eof else b""
+            # Old versions of 'zstandard' do not expose unused_data at all.
+            data = getattr(self._obj, "unused_data", b"") if self._obj.eof else b""
         return b"".join(out)
 
     def flush(self):

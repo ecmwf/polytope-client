@@ -710,6 +710,11 @@ def test_buffered_body_is_still_written(server, tmp_path):
 ###
 
 
+def set_urllib3_decoders(monkeypatch, codecs):
+    """Pretend the installed urllib3 found decoders for 'codecs'."""
+    monkeypatch.setattr(urllib3_response.BaseHTTPResponse, "CONTENT_DECODERS", list(codecs), raising=False)
+
+
 def test_accept_encoding_header_values(monkeypatch):
     assert encoding.accept_encoding_header("none") == "identity"
     assert encoding.accept_encoding_header("gzip") == "gzip"
@@ -718,22 +723,37 @@ def test_accept_encoding_header_values(monkeypatch):
 
     # urllib3 decodes every response that is not a result, so what it can do
     # with zstd decides whether zstd is advertised at all.
-    monkeypatch.setattr(urllib3_response, "HAS_ZSTD", True)
+    set_urllib3_decoders(monkeypatch, ["gzip", "deflate", "zstd"])
     assert encoding.accept_encoding_header("auto") == "zstd, gzip"
     assert encoding.accept_encoding_header("zstd") == "zstd"
 
-    monkeypatch.setattr(urllib3_response, "HAS_ZSTD", False)
+    set_urllib3_decoders(monkeypatch, ["gzip", "deflate"])
     assert encoding.accept_encoding_header("auto") == "gzip"
 
 
-def test_accept_encoding_header_without_a_has_zstd_attribute(monkeypatch):
-    """An urllib3 too old to know about zstd is treated as unable to decode it."""
+def test_zstd_is_advertised_without_a_has_zstd_attribute(monkeypatch):
+    """urllib3 2.0 and 2.1 decode zstd without exposing HAS_ZSTD."""
     monkeypatch.delattr(urllib3_response, "HAS_ZSTD", raising=False)
-    assert encoding.accept_encoding_header("auto") == "gzip"
+    set_urllib3_decoders(monkeypatch, ["gzip", "deflate", "zstd"])
+
+    assert encoding.zstd_available()
+    assert encoding.accept_encoding_header("auto") == "zstd, gzip"
+
+
+@pytest.mark.parametrize("has_zstd,expected", [(True, True), (False, False), (None, False)])
+def test_zstd_gate_falls_back_to_has_zstd(monkeypatch, has_zstd, expected):
+    """urllib3 1.26 has no CONTENT_DECODERS on a BaseHTTPResponse to consult."""
+    monkeypatch.delattr(urllib3_response, "BaseHTTPResponse", raising=False)
+    if has_zstd is None:
+        monkeypatch.delattr(urllib3_response, "HAS_ZSTD", raising=False)
+    else:
+        monkeypatch.setattr(urllib3_response, "HAS_ZSTD", has_zstd, raising=False)
+
+    assert encoding.zstd_available() is expected
 
 
 def test_explicit_zstd_without_urllib3_support_is_refused(monkeypatch):
-    monkeypatch.setattr(urllib3_response, "HAS_ZSTD", False)
+    set_urllib3_decoders(monkeypatch, ["gzip", "deflate"])
 
     with pytest.raises(helpers.PolytopeError) as raised:
         encoding.accept_encoding_header("zstd")

@@ -168,7 +168,7 @@ zstd support is an optional dependency:
 python3 -m pip install 'polytope-client[zstd]'
 ```
 
-The extra installs `backports.zstd`, which is the zstd decoder `urllib3` 2.5 and later look for on Python before 3.14; Python 3.14 has `compression.zstd` in the standard library, and `urllib3` before 2.5 used the `zstandard` package instead. The client decodes results with whichever of the three is installed, but it only advertises `zstd` when `urllib3` itself can decode it: every response that is not a result (the JSON of a submission, a poll or an error) is decoded by `urllib3`, so a codec `urllib3` does not know would make those bodies unreadable.
+The extra installs `urllib3` 2.5 or later together with `backports.zstd`, which is the zstd decoder that `urllib3` looks for on Python before 3.14; Python 3.14 has `compression.zstd` in the standard library, and `urllib3` before 2.5 used the `zstandard` package instead. The client decodes results with whichever of the three is installed, but it only advertises `zstd` when `urllib3` itself can decode it, which it settles by asking `urllib3` which codecs it found decoders for: every response that is not a result (the JSON of a submission, a poll or an error) is decoded by `urllib3`, so a codec `urllib3` does not know would make those bodies unreadable.
 
 Asking for `compression = 'zstd'` when `urllib3` cannot decode zstd is an error, and so is a result served with an encoding this client cannot decode (for example `br` or `deflate`): the client refuses rather than writing a file that is not what it claims to be.
 
