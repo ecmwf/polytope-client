@@ -138,7 +138,7 @@ A Polytope server may compress a result and serve it with a `Content-Encoding`. 
 
 | Option | Values | Default | Meaning |
 | --- | --- | --- | --- |
-| `compression` | `auto`, `none`, `gzip`, `zstd` | `auto` | Codec advertised to the server. `auto` offers the best codec this client can decode: `zstd, gzip` when the optional `zstandard` package is installed, `gzip` otherwise. `none` asks for uncompressed data. The codec of a result is fixed when the request is submitted. |
+| `compression` | `auto`, `none`, `gzip`, `zstd` | `auto` | Codec advertised to the server. `auto` offers the best codec this client can decode: `zstd, gzip` when the installed `urllib3` can decode zstd, `gzip` otherwise. `none` asks for uncompressed data. The codec of a result is fixed when the request is submitted. |
 | `decompress` | `True`, `False` | `True` | Whether to decompress the result while downloading it. With `False` the compressed stream is saved as received and `.gz` or `.zst` is appended to the output file name. |
 
 Both can be set per client, per call, in the configuration file, or through the environment:
@@ -168,7 +168,9 @@ zstd support is an optional dependency:
 python3 -m pip install 'polytope-client[zstd]'
 ```
 
-Asking for `compression = 'zstd'` without the `zstandard` package is an error, and so is a result served with an encoding this client cannot decode (for example `br` or `deflate`): the client refuses rather than writing a file that is not what it claims to be.
+The extra installs `backports.zstd`, which is the zstd decoder `urllib3` 2.5 and later look for on Python before 3.14; Python 3.14 has `compression.zstd` in the standard library, and `urllib3` before 2.5 used the `zstandard` package instead. The client decodes results with whichever of the three is installed, but it only advertises `zstd` when `urllib3` itself can decode it: every response that is not a result (the JSON of a submission, a poll or an error) is decoded by `urllib3`, so a codec `urllib3` does not know would make those bodies unreadable.
+
+Asking for `compression = 'zstd'` when `urllib3` cannot decode zstd is an error, and so is a result served with an encoding this client cannot decode (for example `br` or `deflate`): the client refuses rather than writing a file that is not what it claims to be.
 
 With `pointer = True` no data is downloaded, and the `contentLength` reported by the server is the size of the *compressed* result when the result is stored compressed.
 

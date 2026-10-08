@@ -18,8 +18,8 @@ Behaviour changes a user can notice:
   end of the stream, and an encoded body must reach its gzip trailer or zstd
   frame end to count as complete.
 - A `Content-Encoding` this client cannot decode (`deflate`, `br`, several
-  stacked encodings, or `zstd` without the optional `zstandard` package) raises
-  instead of writing a wrongly decoded file.
+  stacked encodings, or `zstd` with no zstd decoder installed) raises instead of
+  writing a wrongly decoded file.
 - A stream that ends before the gzip trailer or zstd frame end is treated as
   incomplete even when `Content-Length` matches.
 - Result bodies (`application/x-grib`, `application/prs.coverage+json`,
@@ -38,8 +38,22 @@ New options, `compression` (`auto` | `none` | `gzip` | `zstd`, default `auto`)
 and `decompress` (default `True`), are settable as configuration items
 (defaults, config file, `POLYTOPE_COMPRESSION` / `POLYTOPE_DECOMPRESS`, `Client`
 constructor) and per call on `Client.retrieve` / `Client.download`, plus
-`--compression` and `--decompress/--no-decompress` on the CLI. `zstd` decoding
-needs the new optional dependency: `pip install 'polytope-client[zstd]'`.
+`--compression` and `--decompress/--no-decompress` on the CLI.
+
+`zstd` is only advertised when the installed `urllib3` can decode zstd
+(`urllib3.response.HAS_ZSTD`), and `compression='zstd'` is refused otherwise
+with a message naming the package that urllib3 looks for. The client decodes a
+result body itself, but every other response (the JSON of a submission, a poll
+or an error) is decoded by urllib3 before the client sees it, so a codec urllib3
+does not know would turn those bodies into unparseable bytes: against a frontend
+that compresses every response per `Accept-Encoding`, a `400` error body came
+back as raw zstd and the server's message was lost.
+
+The optional `zstd` extra therefore installs `backports.zstd` rather than
+`zstandard`: urllib3 2.5 and later decode zstd with `compression.zstd` (Python
+3.14+) or its `backports.zstd` backport, and only urllib3 before 2.5 used
+`zstandard`. Result bodies are decoded with whichever of the three is installed:
+`pip install 'polytope-client[zstd]'`.
 
 With `pointer = True` the `contentLength` reported by the server is the size of
 the compressed result when the result is stored compressed. This is documented,

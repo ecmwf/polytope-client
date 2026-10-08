@@ -109,8 +109,8 @@ class Client:
         :type extra_headers: dict
         :param compression: Codec the client asks the server to compress
         results with: 'auto' (default; the best codec this client can decode),
-        'none', 'gzip' or 'zstd'. Decoding 'zstd' requires the optional
-        'zstandard' package (pip install 'polytope-client[zstd]').
+        'none', 'gzip' or 'zstd'. Decoding 'zstd' requires an urllib3 that can
+        decode zstd (pip install 'polytope-client[zstd]').
         :type compression: str
         :param decompress: Whether to decompress compressed results while
         downloading them (True; default). When False, the compressed stream is

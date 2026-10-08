@@ -427,7 +427,7 @@ class Config:
         compression: auto
         Codec the client asks the server to compress results with. One of
         'auto' (the best codec this client can decode), 'none', 'gzip' or
-        'zstd'. Decoding 'zstd' requires the optional 'zstandard' package
+        'zstd'. Decoding 'zstd' requires an urllib3 that can decode zstd
         (pip install 'polytope-client[zstd]').
 
         decompress: True

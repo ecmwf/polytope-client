@@ -24,7 +24,9 @@ HTTP response carries ``Content-Encoding`` and a ``Content-Length`` counting the
 therefore reads the wire bytes itself (``decode_content=False``) and decodes them
 with one of the streaming decoders below, whose state survives a resumed request.
 
-Only the codecs this module can decode are ever advertised in ``Accept-Encoding``.
+A codec is advertised in ``Accept-Encoding`` only when this module can decode a
+result body with it *and* urllib3 can decode the other responses with it, since
+those are decoded before the client sees them.
 """
 
 import importlib
