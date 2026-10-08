@@ -51,7 +51,8 @@ needs_zstandard = pytest.mark.skipif(not encoding.zstandard_available(), reason=
 
 def encode(body, codec):
     if codec == encoding.GZIP:
-        return gzip.compress(body)
+        # A fixed mtime keeps the compressed bytes comparable between calls.
+        return gzip.compress(body, mtime=0)
     if codec == encoding.ZSTD:
         return encoding.zstandard_module().ZstdCompressor().compress(body)
     return body
