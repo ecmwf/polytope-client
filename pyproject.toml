@@ -14,7 +14,7 @@ dependencies = [
     "docstring_parser",
     "tqdm",
 ]
-optional-dependencies = { zstd = ["zstandard"] }
+optional-dependencies = { zstd = ["backports.zstd; python_version < \"3.14\""] }
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

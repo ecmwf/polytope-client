@@ -34,6 +34,7 @@ from typing import cast
 
 import pytest
 import requests
+from urllib3 import response as urllib3_response
 
 from polytope.api import encoding, helpers
 from polytope.api.Client import Client
@@ -46,7 +47,15 @@ BODY = json.dumps({"type": "CoverageCollection", "coverages": [{"values": list(r
 
 CODECS = ["identity", "gzip", "zstd"]
 
-needs_zstandard = pytest.mark.skipif(not encoding.zstandard_available(), reason="zstandard is not installed")
+needs_zstd = pytest.mark.skipif(not encoding.zstd_decoder_available(), reason="no zstd decoder is installed")
+
+
+def zstd_compress(body):
+    module = encoding.zstd_module()
+    assert module is not None, "no zstd decoder is installed"
+    if module.__name__ == "zstandard":
+        return module.ZstdCompressor().compress(body)
+    return module.compress(body)
 
 
 def encode(body, codec):
@@ -54,13 +63,20 @@ def encode(body, codec):
         # A fixed mtime keeps the compressed bytes comparable between calls.
         return gzip.compress(body, mtime=0)
     if codec == encoding.ZSTD:
-        return encoding.zstandard_module().ZstdCompressor().compress(body)
+        return zstd_compress(body)
     return body
 
 
 def skip_unless_available(codec):
-    if codec == encoding.ZSTD and not encoding.zstandard_available():
-        pytest.skip("zstandard is not installed")
+    if codec == encoding.ZSTD and not encoding.zstd_decoder_available():
+        pytest.skip("no zstd decoder is installed")
+
+
+def skip_unless_advertisable(codec):
+    """A codec is only asked for when urllib3 can decode it too."""
+    skip_unless_available(codec)
+    if codec == encoding.ZSTD and not encoding.zstd_available():
+        pytest.skip("urllib3 cannot decode zstd, so zstd is never advertised")
 
 
 class Spec:
@@ -74,6 +90,8 @@ class Spec:
         honour_range=True,
         drop_after=None,
         content_type="application/prs.coverage+json",
+        status=None,
+        encode_per_accept_encoding=False,
     ):
         self.payload = payload
         self.content_encoding = content_encoding
@@ -82,6 +100,11 @@ class Spec:
         # Number of body bytes to write on the first request before hanging up.
         self.drop_after = drop_after
         self.content_type = content_type
+        #: Status code to answer with, instead of 200 (or 206 for a range).
+        self.status = status
+        #: Compress every body with the best codec the client advertised, the
+        #: way the Polytope frontend's compression layer does.
+        self.encode_per_accept_encoding = encode_per_accept_encoding
 
 
 class RecordingServer(ThreadingHTTPServer):
@@ -106,6 +129,9 @@ class Handler(BaseHTTPRequestHandler):
         server = cast(RecordingServer, self.server)
         self.rfile.read(_content_length(self.headers))
         self._record("post")
+        if server.spec.encode_per_accept_encoding:
+            self._send_encoded_like_the_frontend(server.spec)
+            return
         body = b'{"message": "queued", "status": "queued"}'
         self.send_response(202)
         self.send_header("Content-Type", "application/json")
@@ -118,6 +144,9 @@ class Handler(BaseHTTPRequestHandler):
         server = cast(RecordingServer, self.server)
         spec = server.spec
         self._record("get")
+        if spec.encode_per_accept_encoding:
+            self._send_encoded_like_the_frontend(spec)
+            return
         first_get = len([item for item in server.received if item["method"] == "get"]) == 1
         drop_after = spec.drop_after if first_get else None
 
@@ -129,7 +158,7 @@ class Handler(BaseHTTPRequestHandler):
             partial = True
         body = spec.payload[start:]
 
-        self.send_response(206 if partial else 200)
+        self.send_response(spec.status or (206 if partial else 200))
         self.send_header("Content-Type", spec.content_type)
         if spec.content_encoding:
             self.send_header("Content-Encoding", spec.content_encoding)
@@ -149,6 +178,28 @@ class Handler(BaseHTTPRequestHandler):
             self._write_chunked(body, drop_after)
         if drop_after is not None:
             self.close_connection = True
+
+    def _send_encoded_like_the_frontend(self, spec):
+        """Compress the body per Accept-Encoding, JSON responses included.
+
+        The frontend wraps every response in tower-http's compression layer, so
+        a codec advertised for the sake of the result also comes back on the
+        JSON of a submission, a poll or an error.
+        """
+        offered = [token.strip().lower() for token in (self.headers.get("Accept-Encoding") or "").split(",")]
+        codec = encoding.IDENTITY
+        for candidate in (encoding.ZSTD, encoding.GZIP):
+            if candidate in offered:
+                codec = candidate
+                break
+        body = encode(spec.payload, codec)
+        self.send_response(spec.status or 200)
+        self.send_header("Content-Type", spec.content_type)
+        if codec != encoding.IDENTITY:
+            self.send_header("Content-Encoding", codec)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _record(self, method):
         headers = {name.lower(): value for name, value in self.headers.items()}
@@ -419,8 +470,8 @@ def test_unsupported_content_encoding_is_refused(server, tmp_path, header):
     assert not os.path.exists(output_file)
 
 
-def test_zstd_content_encoding_without_zstandard_is_refused(server, tmp_path, monkeypatch):
-    monkeypatch.setattr(encoding, "zstandard_module", lambda: None)
+def test_zstd_content_encoding_without_a_decoder_is_refused(server, tmp_path, monkeypatch):
+    monkeypatch.setattr(encoding, "zstd_module", lambda: None)
     server.spec = Spec(BODY, content_encoding="zstd")
 
     output_file = str(tmp_path / "result.covjson")
@@ -470,14 +521,66 @@ def test_accept_encoding_header_values(monkeypatch):
     with pytest.raises(ValueError):
         encoding.accept_encoding_header("br")
 
-    monkeypatch.setattr(encoding, "zstandard_module", lambda: object())
+    # urllib3 decodes every response that is not a result, so what it can do
+    # with zstd decides whether zstd is advertised at all.
+    monkeypatch.setattr(urllib3_response, "HAS_ZSTD", True)
     assert encoding.accept_encoding_header("auto") == "zstd, gzip"
     assert encoding.accept_encoding_header("zstd") == "zstd"
 
-    monkeypatch.setattr(encoding, "zstandard_module", lambda: None)
+    monkeypatch.setattr(urllib3_response, "HAS_ZSTD", False)
     assert encoding.accept_encoding_header("auto") == "gzip"
-    with pytest.raises(ValueError):
+
+
+def test_accept_encoding_header_without_a_has_zstd_attribute(monkeypatch):
+    """An urllib3 too old to know about zstd is treated as unable to decode it."""
+    monkeypatch.delattr(urllib3_response, "HAS_ZSTD", raising=False)
+    assert encoding.accept_encoding_header("auto") == "gzip"
+
+
+def test_explicit_zstd_without_urllib3_support_is_refused(monkeypatch):
+    monkeypatch.setattr(urllib3_response, "HAS_ZSTD", False)
+
+    with pytest.raises(helpers.PolytopeError) as raised:
         encoding.accept_encoding_header("zstd")
+
+    hint = encoding.zstd_hint()
+    # The hint names the decoder this urllib3 looks for, not just any package.
+    assert any(package in hint for package in ["backports.zstd", "compression.zstd", "zstandard"])
+    assert hint in str(raised.value)
+
+
+def test_json_error_compressed_by_the_frontend_is_still_parsed(server, tmp_path):
+    """The frontend compresses every response per Accept-Encoding, errors included.
+
+    A codec advertised for the sake of the result therefore also comes back on
+    the JSON of a failed submission, and that body is decoded by urllib3 before
+    the client sees it. Advertising zstd to an urllib3 that cannot decode it
+    left response.json() with raw zstd bytes and buried the server's message.
+    """
+    message = "invalid request: 'class: d1' is missing keys"
+    server.spec = Spec(
+        json.dumps({"message": message}).encode(),
+        content_type="application/json",
+        status=400,
+        encode_per_accept_encoding=True,
+    )
+
+    client = Client(
+        config_path=tmp_path / "config",
+        address="http://127.0.0.1:%d" % server.server_port,
+        insecure=True,
+        user_key="token",
+        quiet=True,
+    )
+    with pytest.raises(helpers.HTTPResponseError) as raised:
+        client.retrieve("ecmwf-mars", {"param": "t"}, str(tmp_path / "result.covjson"), asynchronous=True)
+
+    assert message in str(raised.value)
+    submit = server.received[0]
+    assert submit["method"] == "post"
+    assert submit["accept-encoding"] == encoding.accept_encoding_header("auto")
+    # zstd is offered only when urllib3 brought a decoder of its own.
+    assert ("zstd" in submit["accept-encoding"]) == encoding.zstd_available()
 
 
 @pytest.mark.parametrize(
@@ -592,10 +695,9 @@ def test_compression_and_decompress_configuration(tmp_path, monkeypatch):
         Client(config_path=tmp_path / "bad", compression="brotli")
 
 
-@needs_zstandard
+@needs_zstd
 def test_zstd_multiple_frames():
-    zstandard = encoding.zstandard_module()
-    stream = zstandard.ZstdCompressor().compress(b"first ") + zstandard.ZstdCompressor().compress(b"second")
+    stream = zstd_compress(b"first ") + zstd_compress(b"second")
     decoder = encoding.make_decoder(encoding.ZSTD)
     assert decoder.decompress(stream) == b"first second"
     assert decoder.eof
@@ -615,7 +717,7 @@ def test_gzip_multiple_members():
 @pytest.mark.parametrize("codec", CODECS)
 def test_retrieve_submits_and_downloads_an_encoded_result(server, tmp_path, codec):
     """Submit, poll and download through the public API, server and all."""
-    skip_unless_available(codec)
+    skip_unless_advertisable(codec)
     server.spec = Spec(encode(BODY, codec), content_encoding=None if codec == encoding.IDENTITY else codec)
 
     client = Client(

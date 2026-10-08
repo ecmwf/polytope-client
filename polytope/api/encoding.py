@@ -27,7 +27,9 @@ with one of the streaming decoders below, whose state survives a resumed request
 Only the codecs this module can decode are ever advertised in ``Accept-Encoding``.
 """
 
+import importlib
 import os
+import sys
 import zlib
 
 from .helpers import PolytopeError
@@ -48,27 +50,100 @@ GZIP_ALIASES = (GZIP, "x-gzip")
 #: File name suffix used when the compressed stream is kept as received.
 SUFFIXES = {GZIP: ".gz", ZSTD: ".zst"}
 
-ZSTD_HINT = "install the 'zstandard' package (pip install 'polytope-client[zstd]')"
+#: Modules that provide a streaming zstd decompressor, in the order urllib3
+#: itself tries them: the standard library module (Python 3.14+), its backport,
+#: and the 'zstandard' package that urllib3 before 2.5 used.
+ZSTD_MODULES = ("compression.zstd", "backports.zstd", "zstandard")
 
 
-def zstandard_module():
-    """Return the ``zstandard`` module, or None when it is not installed.
-
-    The dependency is optional; it is imported lazily so that a client without
-    it keeps working (it then neither advertises nor decodes zstd).
-    """
+def _import(name):
     try:
-        import zstandard  # type: ignore[import-not-found]
+        return importlib.import_module(name)
     except ImportError:
         return None
-    return zstandard
 
 
-def zstandard_available():
-    return zstandard_module() is not None
+def _urllib3_version():
+    """Return the installed urllib3 version as (major, minor), or () when unknown."""
+    urllib3 = _import("urllib3")
+    pieces = str(getattr(urllib3, "__version__", "")).split(".")[:2]
+    try:
+        return tuple(int(piece) for piece in pieces)
+    except ValueError:
+        return ()
 
 
-def accept_encoding_header(compression):
+def zstd_hint():
+    """How to give the installed urllib3 a zstd decoder."""
+    version = _urllib3_version()
+    if version and version < (2, 5):
+        return "install the 'zstandard' package, which this urllib3 decodes zstd with"
+    if sys.version_info >= (3, 14):
+        return (
+            "use a Python built with zstd support (urllib3 decodes zstd with the standard library's "
+            "compression.zstd on Python 3.14 and later)"
+        )
+    return "install the 'backports.zstd' package (pip install 'polytope-client[zstd]')"
+
+
+def zstd_module():
+    """Return the module to decode zstd with, or None when none is installed.
+
+    The candidates are tried in the order urllib3 uses them, so that a result
+    body is decoded by the same implementation as every other response.
+    """
+    for name in ZSTD_MODULES:
+        module = _import(name)
+        if module is not None:
+            return module
+    return None
+
+
+def zstd_decoder_available():
+    """Whether this module can decode a zstd result body."""
+    return zstd_module() is not None
+
+
+def zstd_decompressobj():
+    """Return a streaming zstd decompressor for a single frame.
+
+    Every backend exposes ``decompress(data)``, ``eof`` and ``unused_data``;
+    the standard library one also takes a ``max_length``, which is not used
+    here.
+    """
+    module = zstd_module()
+    if module is None:
+        raise unsupported_encoding_error(ZSTD, reason="no zstd decoder is installed")
+    if module.__name__ == "zstandard":
+        return module.ZstdDecompressor().decompressobj()
+    return module.ZstdDecompressor()
+
+
+def zstd_available():
+    """Whether zstd may be advertised in ``Accept-Encoding``.
+
+    This module decodes result bodies only. Every other response (the JSON of
+    a submission, a poll, an error) is decoded by urllib3 before the client
+    sees it, so advertising a codec urllib3 cannot decode turns those bodies
+    into undecodable bytes. urllib3 therefore has the last word, whatever this
+    module could decode: ``urllib3.response.HAS_ZSTD`` says whether it found a
+    zstd decoder of its own.
+    """
+    urllib3_response = _import("urllib3.response")
+    return bool(getattr(urllib3_response, "HAS_ZSTD", False))
+
+
+def zstd_unavailable_error(situation=None):
+    error = PolytopeError(situation=situation)
+    error.description = (
+        "compression='zstd' needs an urllib3 that can decode zstd, because responses other than a "
+        "result are decoded by urllib3 and not by this client. Either " + zstd_hint() + ", "
+        "or submit the request with compression='gzip' or compression='auto'."
+    )
+    return error
+
+
+def accept_encoding_header(compression, situation=None):
     """Map the ``compression`` option onto an ``Accept-Encoding`` header value.
 
     Only codecs this client can decode are advertised. The Polytope server fixes
@@ -77,14 +152,14 @@ def accept_encoding_header(compression):
     """
     value = IDENTITY if compression is None else str(compression).strip().lower()
     if value == AUTO:
-        return "zstd, gzip" if zstandard_available() else GZIP
+        return "zstd, gzip" if zstd_available() else GZIP
     if value == NONE:
         return IDENTITY
     if value in GZIP_ALIASES:
         return GZIP
     if value == ZSTD:
-        if not zstandard_available():
-            raise ValueError("compression='zstd' requires the zstandard package; " + ZSTD_HINT)
+        if not zstd_available():
+            raise zstd_unavailable_error(situation)
         return ZSTD
     raise ValueError(
         "Invalid compression option '%s'. Valid options are: %s" % (compression, ", ".join(COMPRESSION_OPTIONS))
@@ -96,7 +171,7 @@ def unsupported_encoding_error(value, situation=None, reason=None):
     description = "The server sent Content-Encoding '%s', which this client cannot decode" % value
     if reason:
         description += " (" + reason + ")"
-    description += ". Either " + ZSTD_HINT + " if the data is zstd-encoded, "
+    description += ". Either " + zstd_hint() + " if the data is zstd-encoded, "
     description += "or submit the request with compression='none' to receive the data uncompressed."
     error.description = description
     return error
@@ -121,8 +196,8 @@ def content_encoding_codec(value, situation=None):
     if token in GZIP_ALIASES:
         return GZIP
     if token == ZSTD:
-        if not zstandard_available():
-            return _raise(unsupported_encoding_error(value, situation, "the zstandard package is not installed"))
+        if not zstd_decoder_available():
+            return _raise(unsupported_encoding_error(value, situation, "no zstd decoder is installed"))
         return ZSTD
     return _raise(unsupported_encoding_error(value, situation, "unknown codec"))
 
@@ -196,10 +271,7 @@ class ZstdDecoder:
     verifies_end_of_stream = True
 
     def __init__(self):
-        zstandard = zstandard_module()
-        if zstandard is None:
-            raise unsupported_encoding_error(ZSTD, reason="the zstandard package is not installed")
-        self._new = zstandard.ZstdDecompressor().decompressobj
+        self._new = zstd_decompressobj
         self._obj = self._new()
 
     def decompress(self, data):

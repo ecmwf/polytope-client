@@ -333,9 +333,9 @@ class RequestManager:
         :type pointer: bool
         :param compression: Codec to ask the server to compress the result
         with: 'auto' (default; the best codec this client can decode), 'none',
-        'gzip' or 'zstd' ('zstd' needs the optional 'zstandard' package). The
-        codec is fixed when the request is submitted. Defaults to the value of
-        the 'compression' configuration item.
+        'gzip' or 'zstd' ('zstd' needs an urllib3 that can decode zstd; see
+        the 'zstd' extra). The codec is fixed when the request is submitted.
+        Defaults to the value of the 'compression' configuration item.
         :type compression: str
         :param decompress: Whether to decompress the result while downloading
         it (True; default) or to save the compressed stream as received, with a
@@ -345,7 +345,7 @@ class RequestManager:
         :returns: None
         """
         situation = "trying to submit a retrieval request"
-        accept_encoding = encoding.accept_encoding_header(self._compression_option(compression))
+        accept_encoding = encoding.accept_encoding_header(self._compression_option(compression), situation=situation)
         decompress = self._decompress_option(decompress)
 
         # replaced_level = helpers.lower_stream_handler_level(self._logger)
@@ -816,10 +816,10 @@ class RequestManager:
         :type pointer: bool
         :param compression: Codec advertised to the server: 'auto' (default;
         the best codec this client can decode), 'none', 'gzip' or 'zstd'
-        ('zstd' needs the optional 'zstandard' package). The codec of a result
-        is fixed when the request is submitted, so this only has an effect on
-        the request that submitted the data. Defaults to the value of the
-        'compression' configuration item.
+        ('zstd' needs an urllib3 that can decode zstd; see the 'zstd' extra).
+        The codec of a result is fixed when the request is submitted, so this
+        only has an effect on the request that submitted the data. Defaults to
+        the value of the 'compression' configuration item.
         :type compression: str
         :param decompress: Whether to decompress the result while downloading
         it (True; default) or to save the compressed stream as received, with a
@@ -832,7 +832,7 @@ class RequestManager:
             max_attempts = float("inf")
 
         situation = "trying to download data"
-        accept_encoding = encoding.accept_encoding_header(self._compression_option(compression))
+        accept_encoding = encoding.accept_encoding_header(self._compression_option(compression), situation=situation)
         decompress = self._decompress_option(decompress)
 
         data_ready = False
