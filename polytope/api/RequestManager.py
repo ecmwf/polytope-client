@@ -578,7 +578,15 @@ class RequestManager:
                     )
                     raise e
 
-                if interruption is None and self._download_complete(decoder, wire_received, content_length):
+                # Every announced byte arrived, so an error raised afterwards (a
+                # connection reset after the last byte, a pooled connection torn
+                # down) says nothing about the data. Without a Content-Length
+                # there is nothing to verify the body against and an interruption
+                # must not be ignored.
+                verified = content_length is not None and wire_received == content_length
+                if (interruption is None or verified) and self._download_complete(
+                    decoder, wire_received, content_length
+                ):
                     if decoder is not None:
                         tail = self._decode(decoder, b"", situation, flush=True)
                         if tail:

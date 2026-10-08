@@ -34,6 +34,7 @@ from typing import cast
 
 import pytest
 import requests
+import urllib3
 from urllib3 import response as urllib3_response
 
 from polytope.api import encoding, helpers
@@ -257,6 +258,27 @@ def get(server, **kwargs):
     return requests.get(url(server), stream=True, timeout=30, **kwargs)
 
 
+class RaisingAfterBody:
+    """Wrap 'response.raw' so that the stream raises once the whole body arrived.
+
+    A store behind a pool of connections can reset the connection right after
+    the last byte, which urllib3 reports as a read error on a body that is in
+    fact complete.
+    """
+
+    def __init__(self, raw, error=None):
+        self._raw = raw
+        self._error = error or requests.exceptions.ConnectionError("connection reset after the last byte")
+
+    def __getattr__(self, name):
+        return getattr(self._raw, name)
+
+    def stream(self, amt, decode_content=False):
+        for chunk in self._raw.stream(amt, decode_content=decode_content):
+            yield chunk
+        raise self._error
+
+
 class FakeConfig:
     _cli = False
 
@@ -396,6 +418,39 @@ def test_resume_restarts_when_the_server_ignores_the_range(server, tmp_path, cod
     # The Range was ignored (200), so the decoder was rebuilt and the partial
     # output discarded.
     assert decoders == [codec, codec]
+
+
+@pytest.mark.parametrize("codec", CODECS)
+def test_complete_body_then_a_connection_error_is_a_success(server, tmp_path, codec):
+    """All the announced bytes arrived, so the error afterwards says nothing."""
+    skip_unless_available(codec)
+    payload = encode(BODY, codec)
+    server.spec = Spec(payload, content_encoding=None if codec == encoding.IDENTITY else codec)
+
+    response = get(server)
+    response.raw = RaisingAfterBody(response.raw)
+    output_file = str(tmp_path / "result.covjson")
+    result = manager()._download_to_file(response, output_file, append=False)
+
+    assert Path(result).read_bytes() == BODY
+    # No resume: the file is complete, and a Range at the end of the object
+    # would earn a 416 from a store that validates it.
+    assert len(server.received) == 1
+
+
+@pytest.mark.parametrize("error", [requests.exceptions.ConnectionError, urllib3.exceptions.ProtocolError])
+def test_connection_error_without_a_content_length_is_retried(server, tmp_path, error):
+    """Nothing announced the length, so the body may well have been cut short."""
+    server.spec = Spec(BODY, content_length=False)
+
+    response = get(server)
+    response.raw = RaisingAfterBody(response.raw, error("connection lost"))
+    output_file = str(tmp_path / "result.covjson")
+    result = manager()._download_to_file(response, output_file, append=False)
+
+    assert Path(result).read_bytes() == BODY
+    assert len(server.received) == 2
+    assert "range" not in server.received[1]
 
 
 def test_truncated_gzip_with_matching_content_length_fails(server, tmp_path):
