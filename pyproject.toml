@@ -7,25 +7,26 @@ license-files = ["LICENSE.txt"]
 authors = [{ name = "ECMWF", email = "software.support@ecmwf.int" }]
 urls = { "Homepage" = "https://github.com/ecmwf-projects/polytope-client" }
 dependencies = [
-    "Click",
-    "requests",
-    "pyyaml",
-    "jsonschema",
-    "docstring_parser",
-    "tqdm",
+  "Click",
+  "requests",
+  "pyyaml",
+  "jsonschema",
+  "docstring_parser",
+  "tqdm",
 ]
+optional-dependencies = { zstd = ["zstandard"] }
 classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "Intended Audience :: Science/Research",
-    "Natural Language :: English",
-    "Operating System :: POSIX :: Linux",
-    "Programming Language :: Python",
-    "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Natural Language :: English",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
 ]
 dynamic = ["version"]
 

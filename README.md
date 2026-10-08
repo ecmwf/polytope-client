@@ -132,6 +132,48 @@ Administrators can use this with server-side mocking/debug features, for example
 
 Unsafe or request-controlled headers are rejected case-insensitively. This includes authentication headers, cookies, hop-by-hop/protocol headers, content/range/checksum headers, and proxy/attribution IP headers. Blocked examples include `Cookie`, `Set-Cookie`, `X-Forwarded-For`, `X-Real-IP`, `Forwarded`, and `X-Proxy-Protocol-Addr`.
 
+### Compressed results
+
+A Polytope server may compress a result and serve it with a `Content-Encoding`. The client decodes the stream while downloading it, so the file on disk is the same whether the result travelled compressed or not. Two options control this:
+
+| Option | Values | Default | Meaning |
+| --- | --- | --- | --- |
+| `compression` | `auto`, `none`, `gzip`, `zstd` | `auto` | Codec advertised to the server. `auto` offers the best codec this client can decode: `zstd, gzip` when the optional `zstandard` package is installed, `gzip` otherwise. `none` asks for uncompressed data. The codec of a result is fixed when the request is submitted. |
+| `decompress` | `True`, `False` | `True` | Whether to decompress the result while downloading it. With `False` the compressed stream is saved as received and `.gz` or `.zst` is appended to the output file name. |
+
+Both can be set per client, per call, in the configuration file, or through the environment:
+
+```python
+from polytope.api import Client
+
+c = Client(compression='zstd')                       # for every request of this client
+c.retrieve('ecmwf-mars', request, 'output.grib', compression = 'none')
+c.retrieve('ecmwf-mars', request, 'output.covjson', decompress = False)  # writes output.covjson.zst
+```
+
+```yaml
+compression: zstd
+decompress: true
+```
+
+```bash
+export POLYTOPE_COMPRESSION=zstd
+export POLYTOPE_DECOMPRESS=False
+polytope retrieve mars request.yaml output.grib --compression gzip --no-decompress
+```
+
+zstd support is an optional dependency:
+
+```bash
+python3 -m pip install 'polytope-client[zstd]'
+```
+
+Asking for `compression = 'zstd'` without the `zstandard` package is an error, and so is a result served with an encoding this client cannot decode (for example `br` or `deflate`): the client refuses rather than writing a file that is not what it claims to be.
+
+With `pointer = True` no data is downloaded, and the `contentLength` reported by the server is the size of the *compressed* result when the result is stored compressed.
+
+An interrupted download resumes from the compressed byte offset and keeps decoding where it left off, with no temporary files. If the server ignores the `Range` request, the output file is rewound and the download starts again.
+
 &nbsp;
 ## 4. CLI example
 
@@ -241,11 +283,13 @@ polytope list credentials
 
 polytope retrieve <collection_name> <data.yaml> [<output_file>] [-A|--async] 
                             [-m|--max-attempts] [-P|--attempt-period] 
-                            [--append] [--pointer] [--global opts ...]
+                            [--append] [--pointer] [--compression auto|none|gzip|zstd]
+                            [--decompress|--no-decompress] [--global opts ...]
 
 polytope retrieve <collection_name> -e <inline_request> [<output_file>] [-A|--async]
                             [-m|--max-attempts] [-P|--attempt-period] 
-                            [--append] [--pointer] [--global opts ...]
+                            [--append] [--pointer] [--compression auto|none|gzip|zstd]
+                            [--decompress|--no-decompress] [--global opts ...]
 
 example of an inline request:
 
@@ -267,7 +311,8 @@ polytope login [<username>] [--login-password] [--key-type] [--global-opts ...]
 
 polytope download <request_id> [<output_file>] [-A|--async] [-m|--max-attempts] 
                             [-P|--attempt-period] [--append] [--pointer] 
-                            [--global opts ...]
+                            [--compression auto|none|gzip|zstd]
+                            [--decompress|--no-decompress] [--global opts ...]
 
 polytope archive <collection_name> <metadata.yaml> <input_url> [-m|--max-attempts] 
                             [-P|--attempt-period] [-A|--async] [--global opts ...]

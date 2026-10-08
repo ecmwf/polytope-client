@@ -38,3 +38,30 @@ Environment variable usage. The value of ``POLYTOPE_EXTRA_HEADERS`` must be a JS
 Administrators can use this with server-side mocking/debug features, for example to test role-dependent behaviour with ``Polytope-Mock-Roles: beta:viewer``.
 
 Unsafe or request-controlled headers are rejected case-insensitively. This includes authentication headers, cookies, hop-by-hop/protocol headers, content/range/checksum headers, and proxy/attribution IP headers. Blocked examples include ``Cookie``, ``Set-Cookie``, ``X-Forwarded-For``, ``X-Real-IP``, ``Forwarded``, and ``X-Proxy-Protocol-Addr``.
+
+Compressed results
+------------------
+
+A Polytope server may compress a result and serve it with a ``Content-Encoding``. The client decodes the stream while downloading it, so the file on disk is the same whether the result travelled compressed or not.
+
+Two options control this, both settable per client, per call (``retrieve``, ``download``), in the configuration file, or through the environment (``POLYTOPE_COMPRESSION``, ``POLYTOPE_DECOMPRESS``):
+
+``compression``
+   Codec advertised to the server: ``auto`` (default), ``none``, ``gzip`` or ``zstd``. ``auto`` offers the best codec the client can decode, which is ``zstd, gzip`` when the optional ``zstandard`` package is installed and ``gzip`` otherwise. The codec of a result is fixed when the request is submitted.
+
+``decompress``
+   Whether to decompress the result while downloading it (``True``, default). With ``False`` the compressed stream is saved as received and ``.gz`` or ``.zst`` is appended to the output file name.
+
+.. code-block:: python
+
+   from polytope.api import Client
+
+   c = Client(compression='zstd')
+   c.retrieve('ecmwf-mars', request, 'output.grib', compression = 'none')
+   c.retrieve('ecmwf-mars', request, 'output.covjson', decompress = False)
+
+.. code-block:: bash
+
+   python3 -m pip install 'polytope-client[zstd]'
+
+A result served with an encoding the client cannot decode (for example ``br`` or ``deflate``), or ``zstd`` without the ``zstandard`` package, is an error rather than a wrongly decoded file. With ``pointer = True`` the ``contentLength`` reported by the server is the size of the compressed result when the result is stored compressed.
