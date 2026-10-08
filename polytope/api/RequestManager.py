@@ -641,9 +641,9 @@ class RequestManager:
                     skip_tls=self.config.get()["skip_tls"],
                 )
 
-                if resuming and response.status_code != requests.codes.partial_content:
+                if resuming and not self._range_honoured(response, wire_received, content_length):
                     self._logger.warning(
-                        "The server ignored the Range header and restarted the data; "
+                        "The server did not continue the data where the Range asked it to; "
                         + "discarding the %s byte(s) already written" % decoded_written
                     )
                     codec = encoding.content_encoding_codec(
@@ -681,6 +681,62 @@ class RequestManager:
         """The number of wire bytes a response announces, or None when unknown."""
         value = response.headers.get("Content-Length")
         return None if value is None else int(value)
+
+    def _range_honoured(self, response, wire_received, content_length):
+        """Whether a response continues the download at the wire byte asked for.
+
+        A 206 is only a continuation of what was already written when its
+        Content-Range says so: a store that answers with the whole object, or
+        with a different object altogether, has to be treated as a restart.
+        """
+        if response.status_code != requests.codes.partial_content:
+            return False
+        header = response.headers.get("Content-Range")
+        parsed = self._parse_content_range(header)
+        if parsed is None:
+            self._logger.warning(
+                "The server answered the Range request with a 206 but no readable "
+                + "Content-Range (%s)" % ("absent" if header is None else header)
+            )
+            return False
+        start, total = parsed
+        if start != wire_received:
+            self._logger.warning(
+                "The server answered the Range request at wire byte %s with the bytes from %s" % (wire_received, start)
+            )
+            return False
+        if total is not None and content_length is not None and total != content_length:
+            self._logger.warning(
+                "The server now reports %s byte(s) in total, instead of the %s first announced"
+                % (total, content_length)
+            )
+            return False
+        return True
+
+    @staticmethod
+    def _parse_content_range(value):
+        """Read a 'bytes <start>-<end>/<total>' header as (start, total).
+
+        'total' is None when the server does not state it ('*'), and the whole
+        result is None when the header is absent or cannot be read.
+        """
+        if not value:
+            return None
+        text = str(value).strip()
+        if not text.lower().startswith("bytes"):
+            return None
+        span, _, total_text = text[len("bytes") :].strip().partition("/")
+        try:
+            start = int(span.split("-")[0].strip())
+        except ValueError:
+            return None
+        total_text = total_text.strip()
+        if not total_text or total_text == "*":
+            return start, None
+        try:
+            return start, int(total_text)
+        except ValueError:
+            return start, None
 
     def _iter_wire(self, response, codec, situation):
         """Iterate over the bytes of the body as they arrive on the wire.

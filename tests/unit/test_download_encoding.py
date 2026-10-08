@@ -95,6 +95,7 @@ class Spec:
         encode_per_accept_encoding=False,
         restart_payload=None,
         restart_content_encoding=None,
+        misplaced_range=False,
     ):
         self.payload = payload
         self.content_encoding = content_encoding
@@ -112,6 +113,9 @@ class Spec:
         #: answers a Range with a different object than it first announced.
         self.restart_payload = restart_payload
         self.restart_content_encoding = restart_content_encoding
+        #: Answer a Range with a 206 that carries the whole object, the way a
+        #: store that acknowledges the range but ignores its offset would.
+        self.misplaced_range = misplaced_range
 
 
 class RecordingServer(ThreadingHTTPServer):
@@ -167,7 +171,7 @@ class Handler(BaseHTTPRequestHandler):
         partial = False
         requested_range = self.headers.get("Range")
         if requested_range and spec.honour_range:
-            start = _range_start(requested_range)
+            start = 0 if spec.misplaced_range else _range_start(requested_range)
             partial = True
         body = payload[start:]
 
@@ -455,6 +459,51 @@ def test_reset_adopts_the_content_length_of_the_new_response(server, tmp_path, a
 
     assert Path(result).read_bytes() == (prefix + BODY if append else BODY)
     assert len(server.received) == 2
+
+
+@pytest.mark.parametrize("codec", CODECS)
+def test_206_that_starts_elsewhere_is_treated_as_a_reset(server, tmp_path, codec, monkeypatch):
+    """A 206 that carries the whole object is not a continuation of the data."""
+    skip_unless_available(codec)
+    payload = encode(BODY, codec)
+    server.spec = Spec(
+        payload,
+        content_encoding=None if codec == encoding.IDENTITY else codec,
+        drop_after=len(payload) // 3,
+        misplaced_range=True,
+    )
+
+    decoders = []
+    original_make_decoder = encoding.make_decoder
+    monkeypatch.setattr(encoding, "make_decoder", lambda name: decoders.append(name) or original_make_decoder(name))
+
+    output_file = str(tmp_path / "result.covjson")
+    result = manager()._download_to_file(get(server), output_file, append=False)
+
+    assert Path(result).read_bytes() == BODY
+    assert len(server.received) == 2
+    assert server.received[1]["range"] == "bytes=%d-" % (len(payload) // 3)
+    # The bytes already written were discarded and the decoder rebuilt.
+    assert decoders == [codec, codec]
+
+
+@pytest.mark.parametrize(
+    "header,expected",
+    [
+        ("bytes 10-19/20", (10, 20)),
+        (" bytes 0-0/1 ", (0, 1)),
+        ("bytes 10-19/*", (10, None)),
+        ("BYTES 5-9/20", (5, 20)),
+        ("bytes 10-19", (10, None)),
+        (None, None),
+        ("", None),
+        ("items 10-19/20", None),
+        ("bytes */20", None),
+        ("bytes abc-19/20", None),
+    ],
+)
+def test_content_range_parsing(header, expected):
+    assert RequestManager._parse_content_range(header) == expected
 
 
 @pytest.mark.parametrize("codec", CODECS)
