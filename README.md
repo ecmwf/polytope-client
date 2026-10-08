@@ -10,34 +10,41 @@ This repository contains the source code and documentation of a Polytope client 
 > This software is **Incubating** and subject to ECMWF's guidelines on [Software Maturity](https://github.com/ecmwf/codex/raw/refs/heads/main/Project%20Maturity).
 
 &nbsp;
+
 ## 1. Installation
 
 Install the Polytope client with python3 (>= 3.6) and pip as follows:
+
 ```bash
 python3 -m pip install --upgrade git+https://github.com/ecmwf-projects/polytope-client.git@master
 # make sure the installed polytope executable is added to your PATH if willing to use the CLI
 ```
 
 Or from PyPi (not yet available):
+
 ```bash
 python3 -m pip install polytope-client
 ```
 
 &nbsp;
+
 ## 2. Account creation
 
 In order to access the API, you must first obtain an account for the Polytope server you intend to operate with. Ask the server administrator.
 
 &nbsp;
+
 ## 3. API example
 
 If using a username and password as credentials (as opposed to EmailKey or Bearer credentials, also supported by Polytope) it is recommended to set your username and password as environment variables before starting python:
+
 ```bash
 export POLYTOPE_USERNAME=<your_account_name>
 export POLYTOPE_PASSWORD=<your_account_password>
 ```
 
 Start a python3 session to use the API.
+
 ```python
 #!/usr/bin/env python3
 
@@ -138,7 +145,7 @@ A Polytope server may compress a result and serve it with a `Content-Encoding`. 
 
 | Option | Values | Default | Meaning |
 | --- | --- | --- | --- |
-| `compression` | `auto`, `none`, `gzip`, `zstd` | `auto` | Codec advertised to the server. `auto` offers the best codec this client can decode: `zstd, gzip` when the installed `urllib3` can decode zstd, `gzip` otherwise. `none` asks for uncompressed data. The codec a result is stored with is settled when the request is submitted, and an asynchronous `Result` remembers it so that its `download()` asks for the same one. |
+| `compression` | `auto`, `none`, `gzip`, `zstd` | `auto` | Codec advertised to the server. `auto` offers `zstd, gzip`, the codecs this client can decode, and falls back to `gzip` alone if the installed `urllib3` turns out to have no zstd decoder. `none` asks for uncompressed data. The codec a result is stored with is settled when the request is submitted, and an asynchronous `Result` remembers it so that its `download()` asks for the same one. |
 | `decompress` | `True`, `False` | `True` | Whether to decompress the result while downloading it. With `False` the compressed stream is saved as received and the suffix of the codec the server used (`.gz` or `.zst`) is appended to the output file name; a result that was not compressed keeps the name asked for. |
 
 Both can be set per client, per call, in the configuration file, or through the environment:
@@ -162,13 +169,9 @@ export POLYTOPE_DECOMPRESS=False
 polytope retrieve mars request.yaml output.grib --compression gzip --no-decompress  # writes output.grib.gz
 ```
 
-zstd support is an optional dependency:
+zstd needs nothing installed by hand: `urllib3 >= 2.5` and `backports.zstd` (on Python before 3.14, which has `compression.zstd` in the standard library) are dependencies of this client, so every supported installation can decode zstd and `auto` advertises `zstd, gzip`.
 
-```bash
-python3 -m pip install 'polytope-client[zstd]'
-```
-
-The extra installs `urllib3` 2.5 or later together with `backports.zstd`, which is the zstd decoder that `urllib3` looks for on Python before 3.14; Python 3.14 has `compression.zstd` in the standard library, and `urllib3` before 2.5 used the `zstandard` package instead. The client decodes results with whichever of the three is installed, but it only advertises `zstd` when `urllib3` itself can decode it, which it settles by asking `urllib3` which codecs it found decoders for: every response that is not a result (the JSON of a submission, a poll or an error) is decoded by `urllib3`, so a codec `urllib3` does not know would make those bodies unreadable.
+`urllib3` 2.5 is the first version that decodes zstd with either of those two; `urllib3` before 2.5 used the `zstandard` package instead, which the client still decodes results with when it finds it. `zstd` is only advertised when `urllib3` itself can decode it, which the client settles by asking `urllib3` which codecs it found decoders for: every response that is not a result (the JSON of a submission, a poll or an error) is decoded by `urllib3`, so a codec `urllib3` does not know would make those bodies unreadable. An installation that pushed `urllib3` below the pin therefore asks for `gzip` alone, with a warning.
 
 Asking for `compression = 'zstd'` when `urllib3` cannot decode zstd is an error, and so is a result served with an encoding this client cannot decode (for example `br` or `deflate`): the client refuses rather than writing a file that is not what it claims to be.
 
@@ -177,9 +180,11 @@ With `pointer = True` no data is downloaded, and the `contentLength` reported by
 An interrupted download resumes from the compressed byte offset and keeps decoding where it left off, with no temporary files. If the server ignores the `Range` request, the output file is rewound and the download starts again.
 
 &nbsp;
+
 ## 4. CLI example
 
 You can check the documentation of the CLI as follows.
+
 ```bash
 polytope -h
 ```
@@ -245,6 +250,7 @@ polytope revoke all
 ```
 
 The following dialog shows an overview of the syntax of the CLI:
+
 ```bash
 
 # High-level user commands
@@ -322,7 +328,6 @@ polytope archive <collection_name> <metadata.yaml> <input_url> [-m|--max-attempt
 polytope upload <request_id> <input_url> [-A|--async] [-m|--max-attempts]
                             [-P|--attempt-period] [--global opts ...]
 ```
-
 
 ## Acknowledgements
 

@@ -336,9 +336,9 @@ class RequestManager:
         'contentLength' is the size of the compressed data.
         :type pointer: bool
         :param compression: Codec to ask the server to compress the result
-        with: 'auto' (default; the best codec this client can decode), 'none',
-        'gzip' or 'zstd' ('zstd' needs an urllib3 that can decode zstd; see
-        the 'zstd' extra). The codec is fixed when the request is submitted.
+        with: 'auto' (default; the best codec this client can decode, which is
+        'zstd, gzip' on any supported installation), 'none', 'gzip' or 'zstd'.
+        The codec is fixed when the request is submitted.
         Defaults to the value of the 'compression' configuration item.
         :type compression: str
         :param decompress: Whether to decompress the result while downloading
@@ -349,7 +349,9 @@ class RequestManager:
         :returns: None
         """
         situation = "trying to submit a retrieval request"
-        accept_encoding = encoding.accept_encoding_header(self._compression_option(compression), situation=situation)
+        accept_encoding = encoding.accept_encoding_header(
+            self._compression_option(compression), situation=situation, logger=self._logger
+        )
         decompress = self._decompress_option(decompress)
 
         # replaced_level = helpers.lower_stream_handler_level(self._logger)
@@ -947,8 +949,8 @@ class RequestManager:
         'contentLength' is the size of the compressed data.
         :type pointer: bool
         :param compression: Codec advertised to the server: 'auto' (default;
-        the best codec this client can decode), 'none', 'gzip' or 'zstd'
-        ('zstd' needs an urllib3 that can decode zstd; see the 'zstd' extra).
+        the best codec this client can decode, which is 'zstd, gzip' on any
+        supported installation), 'none', 'gzip' or 'zstd'.
         The codec a result is stored with is settled when the request is
         submitted, so this is the codec that submission asked for; a server
         that compresses responses as it serves them honours it here too.
@@ -965,7 +967,9 @@ class RequestManager:
             max_attempts = float("inf")
 
         situation = "trying to download data"
-        accept_encoding = encoding.accept_encoding_header(self._compression_option(compression), situation=situation)
+        accept_encoding = encoding.accept_encoding_header(
+            self._compression_option(compression), situation=situation, logger=self._logger
+        )
         decompress = self._decompress_option(decompress)
 
         data_ready = False

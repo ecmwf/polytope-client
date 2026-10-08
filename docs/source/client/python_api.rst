@@ -47,7 +47,7 @@ A Polytope server may compress a result and serve it with a ``Content-Encoding``
 Two options control this, both settable per client, per call (``retrieve``, ``download``), in the configuration file, or through the environment (``POLYTOPE_COMPRESSION``, ``POLYTOPE_DECOMPRESS``):
 
 ``compression``
-   Codec advertised to the server: ``auto`` (default), ``none``, ``gzip`` or ``zstd``. ``auto`` offers the best codec the client can decode, which is ``zstd, gzip`` when the installed ``urllib3`` can decode zstd and ``gzip`` otherwise. The codec a result is stored with is settled when the request is submitted, and an asynchronous ``Result`` remembers it so that its ``download()`` asks for the same one.
+   Codec advertised to the server: ``auto`` (default), ``none``, ``gzip`` or ``zstd``. ``auto`` offers ``zstd, gzip``, the codecs the client can decode, and falls back to ``gzip`` alone if the installed ``urllib3`` turns out to have no zstd decoder. The codec a result is stored with is settled when the request is submitted, and an asynchronous ``Result`` remembers it so that its ``download()`` asks for the same one.
 
 ``decompress``
    Whether to decompress the result while downloading it (``True``, default). With ``False`` the compressed stream is saved as received and the suffix of the codec the server used (``.gz`` or ``.zst``) is appended to the output file name; a result that was not compressed keeps the name asked for.
@@ -60,10 +60,6 @@ Two options control this, both settable per client, per call (``retrieve``, ``do
    c.retrieve('ecmwf-mars', request, 'output.grib', compression = 'none')
    c.retrieve('ecmwf-mars', request, 'output.covjson', decompress = False)  # writes output.covjson.gz or .zst
 
-.. code-block:: bash
-
-   python3 -m pip install 'polytope-client[zstd]'
-
-The ``zstd`` extra installs ``urllib3`` 2.5 or later together with ``backports.zstd``, the zstd decoder that ``urllib3`` looks for on Python before 3.14 (Python 3.14 provides ``compression.zstd`` in the standard library, and ``urllib3`` before 2.5 used the ``zstandard`` package instead; the client decodes results with whichever of the three is installed). ``zstd`` is only advertised when ``urllib3`` itself can decode it, which the client settles by asking ``urllib3`` which codecs it found decoders for, because every response other than a result (the JSON of a submission, a poll or an error) is decoded by ``urllib3`` and not by this client.
+zstd needs nothing installed by hand: ``urllib3 >= 2.5`` and ``backports.zstd`` (on Python before 3.14, which provides ``compression.zstd`` in the standard library) are dependencies of this client, so every supported installation can decode zstd. ``urllib3`` 2.5 is the first version that decodes zstd with either of those two; ``urllib3`` before 2.5 used the ``zstandard`` package instead, which the client still decodes results with when it finds it. ``zstd`` is only advertised when ``urllib3`` itself can decode it, which the client settles by asking ``urllib3`` which codecs it found decoders for, because every response other than a result (the JSON of a submission, a poll or an error) is decoded by ``urllib3`` and not by this client; an installation that pushed ``urllib3`` below the pin asks for ``gzip`` alone, with a warning.
 
 A result served with an encoding the client cannot decode (for example ``br`` or ``deflate``), or ``zstd`` without a zstd decoder, is an error rather than a wrongly decoded file. With ``pointer = True`` the ``contentLength`` reported by the server is the size of the compressed result when the result is stored compressed.

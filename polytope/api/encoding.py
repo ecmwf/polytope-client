@@ -21,8 +21,9 @@
 The Polytope server may store and serve a result compressed, in which case the
 HTTP response carries ``Content-Encoding`` and a ``Content-Length`` counting the
 *compressed* bytes, and byte ranges address the *compressed* stream. The client
-therefore reads the wire bytes itself (``decode_content=False``) and decodes them
-with one of the streaming decoders below, whose state survives a resumed request.
+therefore counts the bytes as received, before decoding
+(``decode_content=False``), and decodes them with one of the streaming decoders
+below, whose state survives a resumed request.
 
 A codec is advertised in ``Accept-Encoding`` only when this module can decode a
 result body with it *and* urllib3 can decode the other responses with it, since
@@ -30,6 +31,7 @@ those are decoded before the client sees them.
 """
 
 import importlib
+import logging
 import os
 import sys
 import zlib
@@ -53,12 +55,14 @@ GZIP_ALIASES = (GZIP, "x-gzip")
 SUFFIXES = {GZIP: ".gz", ZSTD: ".zst"}
 
 #: Largest amount of data a decoder is asked to produce in one call, so that a
-#: single compressed chunk from the wire cannot expand into gigabytes of memory.
+#: single compressed chunk as received cannot expand into gigabytes of memory.
 MAX_DECODED_SLICE = 8 * 1024 * 1024
 
 #: Modules that provide a streaming zstd decompressor, in the order urllib3
 #: itself tries them: the standard library module (Python 3.14+), its backport,
-#: and the 'zstandard' package that urllib3 before 2.5 used.
+#: and the 'zstandard' package that urllib3 before 2.5 used. One of the first
+#: two is always installed, since 'backports.zstd' is a dependency of this
+#: client; the third covers an environment that bypassed the urllib3 >= 2.5 pin.
 ZSTD_MODULES = ("compression.zstd", "backports.zstd", "zstandard")
 
 
@@ -84,17 +88,20 @@ def zstd_hint():
     version = _urllib3_version()
     if version and version < (2, 0):
         return (
-            "upgrade to urllib3 2.5 or later and install the 'backports.zstd' package "
-            "(pip install 'polytope-client[zstd]'), since this urllib3 cannot decode zstd at all"
+            "upgrade to urllib3 2.5 or later, the floor this client depends on, since this urllib3 "
+            "cannot decode zstd at all"
         )
     if version and version < (2, 5):
-        return "install the 'zstandard' package, which this urllib3 decodes zstd with"
+        return (
+            "upgrade to urllib3 2.5 or later, the floor this client depends on, or install the "
+            "'zstandard' package, which this urllib3 decodes zstd with"
+        )
     if sys.version_info >= (3, 14):
         return (
             "use a Python built with zstd support (urllib3 decodes zstd with the standard library's "
             "compression.zstd on Python 3.14 and later)"
         )
-    return "install the 'backports.zstd' package (pip install 'polytope-client[zstd]')"
+    return "reinstall 'backports.zstd', the dependency of this client that urllib3 decodes zstd with"
 
 
 def zstd_module():
@@ -161,7 +168,7 @@ def zstd_unavailable_error(situation=None):
     return error
 
 
-def accept_encoding_header(compression, situation=None):
+def accept_encoding_header(compression, situation=None, logger=None):
     """Map the ``compression`` option onto an ``Accept-Encoding`` header value.
 
     Only codecs this client can decode are advertised. The Polytope server fixes
@@ -170,7 +177,15 @@ def accept_encoding_header(compression, situation=None):
     """
     value = IDENTITY if compression is None else str(compression).strip().lower()
     if value == AUTO:
-        return "zstd, gzip" if zstd_available() else GZIP
+        if zstd_available():
+            return "zstd, gzip"
+        # The dependencies of this client give every supported interpreter a
+        # zstd decoder, so getting here means the environment was built around
+        # them (an urllib3 older than the pin, say). gzip still works.
+        (logger or logging.getLogger(__name__)).warning(
+            "Asking for gzip only: the installed urllib3 has no zstd decoder (%s)" % zstd_hint()
+        )
+        return GZIP
     if value == NONE:
         return IDENTITY
     if value in GZIP_ALIASES:

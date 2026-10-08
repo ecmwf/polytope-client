@@ -7,28 +7,32 @@ license-files = ["LICENSE.txt"]
 authors = [{ name = "ECMWF", email = "software.support@ecmwf.int" }]
 urls = { "Homepage" = "https://github.com/ecmwf-projects/polytope-client" }
 dependencies = [
-    "Click",
-    "requests",
-    "pyyaml",
-    "jsonschema",
-    "docstring_parser",
-    "tqdm",
+  "Click",
+  "requests",
+  "pyyaml",
+  "jsonschema",
+  "docstring_parser",
+  "tqdm",
+  # urllib3 2.5 is the first that decodes zstd with the standard library's
+  # compression.zstd (Python 3.14 and later) or with backports.zstd; earlier
+  # versions look for the 'zstandard' package instead, or cannot decode zstd
+  # at all. These two together give every supported interpreter a zstd
+  # decoder, for results and for every other response alike.
+  "urllib3>=2.5",
+  "backports.zstd; python_version < \"3.14\"",
 ]
-# urllib3 before 2.5 decodes zstd with the 'zstandard' package and never looks
-# at backports.zstd, so the extra pins the urllib3 that does.
-optional-dependencies = { zstd = ["backports.zstd; python_version < \"3.14\"", "urllib3>=2.5"] }
 classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "Intended Audience :: Science/Research",
-    "Natural Language :: English",
-    "Operating System :: POSIX :: Linux",
-    "Programming Language :: Python",
-    "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Natural Language :: English",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
 ]
 dynamic = ["version"]
 
