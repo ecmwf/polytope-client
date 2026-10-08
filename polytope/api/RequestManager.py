@@ -594,6 +594,18 @@ class RequestManager:
                     self._logger.info("Data downloaded successfully")
                     break
 
+                # The stream of the codec does not end where the body does, so
+                # the object on the server is truncated: downloading the same
+                # bytes again, from the start or from a byte range, cannot end
+                # any differently.
+                if verified and decoder is not None and decoder.verifies_end_of_stream and not decoder.eof:
+                    e = helpers.PolytopeError(situation)
+                    e.description = (
+                        "Download failed: incomplete %s stream: the server announced %s byte(s) and all of them "
+                        "arrived, but the stream has no end marker" % (decoder.codec, content_length)
+                    )
+                    raise e
+
                 self._logger.warning(
                     "Download incomplete, received %s byte(s) out of %s"
                     % (wire_received, "unknown" if content_length is None else content_length)

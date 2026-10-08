@@ -539,15 +539,19 @@ def test_connection_error_without_a_content_length_is_retried(server, tmp_path, 
     assert "range" not in server.received[1]
 
 
-def test_truncated_gzip_with_matching_content_length_fails(server, tmp_path):
-    # The gzip trailer never arrives, but Content-Length matches what is sent.
-    server.spec = Spec(gzip.compress(BODY)[:-8], content_encoding="gzip")
-    request_manager = manager()
-    request_manager._http_max_attempts = 1
+@pytest.mark.parametrize("codec", [encoding.GZIP, encoding.ZSTD])
+def test_truncated_stream_with_matching_content_length_fails(server, tmp_path, codec):
+    # The end of the stream never arrives, but Content-Length matches what is sent.
+    skip_unless_available(codec)
+    server.spec = Spec(encode(BODY, codec)[:-8], content_encoding=codec)
 
     output_file = str(tmp_path / "result.covjson")
-    with pytest.raises(helpers.PolytopeError):
-        request_manager._download_to_file(get(server), output_file, append=False)
+    with pytest.raises(helpers.PolytopeError) as raised:
+        manager()._download_to_file(get(server), output_file, append=False)
+
+    assert "no end marker" in str(raised.value)
+    # Fetching the same truncated object again cannot end any differently.
+    assert len(server.received) == 1
 
 
 @pytest.mark.parametrize("codec", CODECS)
