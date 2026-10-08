@@ -89,6 +89,7 @@ class Config:
             "compression",
             "decompress",
         ]
+        self.boolean_config_items = ["quiet", "verbose", "insecure", "skip_tls", "decompress"]
 
         # Reading session configuration
         config = locals()
@@ -142,8 +143,15 @@ class Config:
         for var in self.file_config_items:
             val = os.environ.get(fun(var))
             if val:
+                # An environment variable arrives as a string: validate and
+                # canonicalise it here, as the session and file paths do, rather
+                # than leaving a typo to surface on the first request.
                 if var == "extra_headers":
                     val = helpers.parse_extra_headers_json(val)
+                elif var == "compression":
+                    val = helpers.normalize_compression(val)
+                elif var in self.boolean_config_items:
+                    val = helpers.normalize_boolean(fun(var), val)
                 env_var_config[var] = val
         self.env_var_config = env_var_config
 
@@ -243,10 +251,9 @@ class Config:
                 if item in self.file_config:
                     config[item] = self.file_config[item]
 
-        booleans = ["quiet", "verbose", "insecure", "skip_tls", "decompress"]
-        for item in booleans:
+        for item in self.boolean_config_items:
             if isinstance(config[item], str):
-                config[item] = config[item].lower() in ["true", "1"]
+                config[item] = config[item].strip().lower() in helpers.TRUE_VALUES
 
         config["extra_headers"] = helpers.normalize_extra_headers(config.get("extra_headers", {}))
 

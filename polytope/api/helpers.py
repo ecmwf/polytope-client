@@ -346,6 +346,25 @@ def normalize_extra_headers(extra_headers, reject_unsafe=True):
     return normalized
 
 
+#: Spellings accepted for a boolean configuration item given as a string.
+TRUE_VALUES = ("true", "1")
+FALSE_VALUES = ("false", "0")
+
+
+def normalize_boolean(name, value):
+    """Validate and canonicalise a boolean configuration item."""
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in TRUE_VALUES:
+        return True
+    if normalized in FALSE_VALUES:
+        return False
+    raise ValueError(
+        "Invalid %s value '%s'. Valid values are: %s" % (name, value, ", ".join(TRUE_VALUES + FALSE_VALUES))
+    )
+
+
 def normalize_compression(value):
     """Validate and canonicalise the 'compression' configuration item."""
     from . import encoding

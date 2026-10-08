@@ -890,6 +890,48 @@ def test_compression_and_decompress_configuration(tmp_path, monkeypatch):
         Client(config_path=tmp_path / "bad", compression="brotli")
 
 
+@pytest.mark.parametrize("value,expected", [("zstd", "zstd"), ("GZIP", "gzip"), (" none ", "none")])
+def test_compression_environment_variable_is_canonicalised(tmp_path, monkeypatch, value, expected):
+    monkeypatch.setenv("POLYTOPE_COMPRESSION", value)
+
+    client = Client(config_path=tmp_path / "env")
+
+    assert client.config.get()["compression"] == expected
+
+
+def test_invalid_compression_environment_variable_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setenv("POLYTOPE_COMPRESSION", "bogus")
+
+    with pytest.raises(ValueError) as raised:
+        Client(config_path=tmp_path / "env")
+
+    assert "bogus" in str(raised.value)
+    assert "auto" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [("true", True), ("True", True), ("1", True), ("false", False), ("False", False), ("0", False)],
+)
+def test_decompress_environment_variable_spellings(tmp_path, monkeypatch, value, expected):
+    monkeypatch.setenv("POLYTOPE_DECOMPRESS", value)
+
+    client = Client(config_path=tmp_path / "env")
+
+    assert client.config.get()["decompress"] is expected
+
+
+def test_invalid_decompress_environment_variable_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setenv("POLYTOPE_DECOMPRESS", "yes")
+
+    with pytest.raises(ValueError) as raised:
+        Client(config_path=tmp_path / "env")
+
+    # 'yes' used to mean False, silently.
+    assert "POLYTOPE_DECOMPRESS" in str(raised.value)
+    assert "yes" in str(raised.value)
+
+
 @needs_zstd
 def test_zstd_multiple_frames():
     stream = zstd_compress(b"first ") + zstd_compress(b"second")
