@@ -16,8 +16,24 @@
 # granted to it by virtue of its status as an intergovernmental organisation nor
 # does it submit to any jurisdiction.
 
+import os
 import tempfile
+
+import pytest
 
 
 class ValueStorage:
     config_path = tempfile.gettempdir()
+
+
+@pytest.fixture(autouse=True)
+def without_polytope_environment(monkeypatch):
+    """Keep the environment of whoever runs the tests out of the configuration.
+
+    A POLYTOPE_* variable exported in the shell (POLYTOPE_COMPRESSION, say) is
+    read by every client the tests build, and would otherwise decide what the
+    code under test does.
+    """
+    for name in list(os.environ):
+        if name.startswith("POLYTOPE_"):
+            monkeypatch.delenv(name, raising=False)

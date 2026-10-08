@@ -27,6 +27,7 @@ import gzip
 import json
 import logging
 import os
+import random
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -98,6 +99,7 @@ class Spec:
         misplaced_range=False,
         resumed_content_type=None,
         duplicate_content_length=False,
+        range_status=None,
     ):
         self.payload = payload
         self.content_encoding = content_encoding
@@ -123,6 +125,9 @@ class Spec:
         self.resumed_content_type = resumed_content_type
         #: Send Content-Length twice, which 'requests' joins with a comma.
         self.duplicate_content_length = duplicate_content_length
+        #: Refuse any Range request with this status, the way a store answers a
+        #: range at or past the end of the object with a 416.
+        self.range_status = range_status
 
 
 class RecordingServer(ThreadingHTTPServer):
@@ -227,6 +232,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", spec.content_type)
         if codec != encoding.IDENTITY:
             self.send_header("Content-Encoding", codec)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_range_refusal(self, status, total):
+        """Refuse a Range the way a result store refuses an unsatisfiable one."""
+        body = b"<Error><Code>InvalidRange</Code></Error>"
+        self.send_response(status)
+        self.send_header("Content-Type", "application/xml")
+        self.send_header("Content-Range", "bytes */%d" % total)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -590,6 +605,21 @@ def test_duplicated_content_length_is_treated_as_unknown(server, tmp_path, caplo
 
     assert Path(result).read_bytes() == BODY
     assert any("Content-Length" in record.getMessage() for record in caplog.records)
+
+
+def test_a_complete_body_is_never_resumed_into_a_416(server, tmp_path):
+    """A store refuses a range at the end of the object, and rightly so."""
+    payload = encode(BODY, encoding.GZIP)
+    server.spec = Spec(payload, content_encoding="gzip", range_status=416)
+
+    response = get(server)
+    response.raw = RaisingAfterBody(response.raw)
+    output_file = str(tmp_path / "result.covjson")
+    result = manager()._download_to_file(response, output_file, append=False)
+
+    assert Path(result).read_bytes() == BODY
+    assert len(server.received) == 1
+    assert all("range" not in request for request in server.received)
 
 
 @pytest.mark.parametrize("codec", [encoding.GZIP, encoding.ZSTD])
@@ -1062,6 +1092,27 @@ def test_gzip_multiple_members():
     decoder = encoding.make_decoder(encoding.GZIP)
     assert decoder.decompress(stream) == b"first second"
     assert decoder.eof
+
+
+@pytest.mark.parametrize("offset", [-1, 0, 1], ids=["before", "on", "after"])
+def test_multi_member_gzip_across_a_read_boundary(server, tmp_path, offset):
+    """Two gzip members whose boundary lands on a read-chunk edge.
+
+    The member ends in the middle of a 64 KiB read, exactly on its edge, or one
+    byte past it, which is where the switch to the next member goes wrong.
+    """
+    data = random.Random(0).randbytes(64 * 1024)
+    first = gzip.compress(data, mtime=0)
+    second = gzip.compress(data[::-1], mtime=0)
+    server.spec = Spec(first + second, content_encoding="gzip")
+    request_manager = manager()
+    request_manager._download_chunk_size = len(first) + offset
+
+    output_file = str(tmp_path / "result.covjson")
+    result = request_manager._download_to_file(get(server), output_file, append=False)
+
+    assert Path(result).read_bytes() == data + data[::-1]
+    assert len(server.received) == 1
 
 
 @pytest.mark.parametrize("codec", [encoding.GZIP, encoding.ZSTD])
