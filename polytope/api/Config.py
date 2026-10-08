@@ -49,6 +49,8 @@ class Config:
         logger=None,
         cli=False,
         extra_headers=None,
+        compression=None,
+        decompress=None,
     ):
         # hard-coded defaults are not specified in the __init__ header
         # so that session configuration specified in the headers is not
@@ -84,6 +86,8 @@ class Config:
             "insecure",
             "skip_tls",
             "extra_headers",
+            "compression",
+            "decompress",
         ]
 
         # Reading session configuration
@@ -111,6 +115,8 @@ class Config:
         config["insecure"] = False
         config["skip_tls"] = False
         config["extra_headers"] = {}
+        config["compression"] = "auto"
+        config["decompress"] = True
         self.default_config = config
 
         # Reading system-wide file configuration
@@ -237,7 +243,7 @@ class Config:
                 if item in self.file_config:
                     config[item] = self.file_config[item]
 
-        booleans = ["quiet", "verbose", "insecure", "skip_tls"]
+        booleans = ["quiet", "verbose", "insecure", "skip_tls", "decompress"]
         for item in booleans:
             if isinstance(config[item], str):
                 config[item] = config[item].lower() in ["true", "1"]
@@ -417,6 +423,17 @@ class Config:
         log_level: DEBUG
         Level of detail of the log messages stored in the log_file. Accepts
         any Python logging level (WARNING, INFO, DEBUG, ...).
+
+        compression: auto
+        Codec the client asks the server to compress results with. One of
+        'auto' (the best codec this client can decode), 'none', 'gzip' or
+        'zstd'. Decoding 'zstd' requires the optional 'zstandard' package
+        (pip install 'polytope-client[zstd]').
+
+        decompress: True
+        Whether to decompress compressed results while downloading them. When
+        False, the compressed stream is saved as received and a '.gz' or
+        '.zst' suffix is appended to the output file name.
 
         user_key: None
         Polytope user key
