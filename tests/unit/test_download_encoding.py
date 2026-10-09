@@ -52,6 +52,12 @@ CODECS = ["identity", "gzip", "zstd"]
 needs_zstd = pytest.mark.skipif(not encoding.zstd_decoder_available(), reason="no zstd decoder is installed")
 
 
+def saved_file(result) -> Path:
+    """The file a download wrote to; a download that returned the bytes wrote no file."""
+    assert isinstance(result, str), f"expected a saved file, got {type(result).__name__}"
+    return Path(result)
+
+
 def zstd_compress(body):
     module = encoding.zstd_module()
     assert module is not None, "no zstd decoder is installed"
@@ -359,7 +365,7 @@ def test_download_decodes_every_codec(server, tmp_path, codec, content_length):
     result = manager()._download_to_file(get(server), output_file, append=False)
 
     assert result == output_file
-    assert Path(result).read_bytes() == BODY
+    assert saved_file(result).read_bytes() == BODY
 
 
 @pytest.mark.parametrize("codec", [encoding.GZIP, encoding.ZSTD])
@@ -448,7 +454,7 @@ def test_resume_whose_response_is_not_labelled_as_a_result(server, tmp_path, res
     output_file = str(tmp_path / "result.grib")
     result = manager()._download_to_file(get(server), output_file, append=False)
 
-    assert Path(result).read_bytes() == BODY
+    assert saved_file(result).read_bytes() == BODY
     assert len(server.received) == 2
 
 
@@ -504,7 +510,7 @@ def test_reset_adopts_the_content_length_of_the_new_response(server, tmp_path, a
 
     result = manager()._download_to_file(get(server), output_file, append=append)
 
-    assert Path(result).read_bytes() == (prefix + BODY if append else BODY)
+    assert saved_file(result).read_bytes() == (prefix + BODY if append else BODY)
     assert len(server.received) == 2
 
 
@@ -527,7 +533,7 @@ def test_206_that_starts_elsewhere_is_treated_as_a_reset(server, tmp_path, codec
     output_file = str(tmp_path / "result.covjson")
     result = manager()._download_to_file(get(server), output_file, append=False)
 
-    assert Path(result).read_bytes() == BODY
+    assert saved_file(result).read_bytes() == BODY
     assert len(server.received) == 2
     assert server.received[1]["range"] == "bytes=%d-" % (len(payload) // 3)
     # The bytes already written were discarded and the decoder rebuilt.
@@ -565,7 +571,7 @@ def test_complete_body_then_a_connection_error_is_a_success(server, tmp_path, co
     output_file = str(tmp_path / "result.covjson")
     result = manager()._download_to_file(response, output_file, append=False)
 
-    assert Path(result).read_bytes() == BODY
+    assert saved_file(result).read_bytes() == BODY
     # No resume: the file is complete, and a Range at the end of the object
     # would earn a 416 from a store that validates it.
     assert len(server.received) == 1
@@ -589,7 +595,7 @@ def test_connection_error_without_a_content_length_is_retried(server, tmp_path, 
     output_file = str(tmp_path / "result.covjson")
     result = manager()._download_to_file(response, output_file, append=False)
 
-    assert Path(result).read_bytes() == BODY
+    assert saved_file(result).read_bytes() == BODY
     assert len(server.received) == 2
     assert "range" not in server.received[1]
 
@@ -603,7 +609,7 @@ def test_duplicated_content_length_is_treated_as_unknown(server, tmp_path, caplo
     with caplog.at_level(logging.WARNING, logger=LOGGER.name):
         result = manager()._download_to_file(get(server), output_file, append=False)
 
-    assert Path(result).read_bytes() == BODY
+    assert saved_file(result).read_bytes() == BODY
     assert any("Content-Length" in record.getMessage() for record in caplog.records)
 
 
@@ -617,7 +623,7 @@ def test_a_complete_body_is_never_resumed_into_a_416(server, tmp_path):
     output_file = str(tmp_path / "result.covjson")
     result = manager()._download_to_file(response, output_file, append=False)
 
-    assert Path(result).read_bytes() == BODY
+    assert saved_file(result).read_bytes() == BODY
     assert len(server.received) == 1
     assert all("range" not in request for request in server.received)
 
@@ -647,7 +653,7 @@ def test_decompress_false_keeps_the_stream_and_names_the_file(server, tmp_path, 
     result = manager()._download_to_file(get(server), output_file, append=False, decompress=False)
 
     assert result == output_file + encoding.suffix(codec)
-    assert Path(result).read_bytes() == payload
+    assert saved_file(result).read_bytes() == payload
     if codec != encoding.IDENTITY:
         assert not os.path.exists(output_file)
 
@@ -672,7 +678,7 @@ def test_decompress_false_without_output_file(server, tmp_path, codec, monkeypat
     result = manager()._download(get(server), None, False, request_id="req-1", decompress=False)
 
     assert os.path.basename(result) == "req-1.covjson" + encoding.suffix(codec)
-    assert Path(result).read_bytes() == encode(BODY, codec)
+    assert saved_file(result).read_bytes() == encode(BODY, codec)
 
 
 @pytest.mark.parametrize("codec", CODECS)
@@ -684,7 +690,7 @@ def test_download_without_output_file_decodes(server, tmp_path, codec, monkeypat
     result = manager()._download(get(server), None, False, request_id="req-1")
 
     assert os.path.basename(result) == "req-1.covjson"
-    assert Path(result).read_bytes() == BODY
+    assert saved_file(result).read_bytes() == BODY
 
 
 @pytest.mark.parametrize("header", ["br", "deflate", "gzip, br", "compress"])
@@ -726,7 +732,7 @@ def test_grib_decompress_false_keeps_the_stream(server, tmp_path):
     result = manager()._download(get(server), output_file, False, decompress=False)
 
     assert result == output_file + ".gz"
-    assert Path(result).read_bytes() == payload
+    assert saved_file(result).read_bytes() == payload
     assert not os.path.exists(output_file)
 
 
@@ -738,7 +744,40 @@ def test_grib_decompress_false_without_output_file(server, tmp_path, monkeypatch
     result = manager()._download(get(server), None, False, request_id="req-1", decompress=False)
 
     assert os.path.basename(result) == "req-1.grib.gz"
-    assert Path(result).read_bytes() == payload
+    assert saved_file(result).read_bytes() == payload
+
+
+def test_tensogram_download(server, tmp_path):
+    """The server sends tensogram identity-encoded; the body reaches the file untouched."""
+    server.spec = Spec(BODY, content_type="application/vnd.ecmwf.tensogram")
+
+    output_file = str(tmp_path / "result.tgm")
+    result = manager()._download(get(server), output_file, False)
+
+    assert result == output_file
+    assert Path(output_file).read_bytes() == BODY
+
+
+def test_tensogram_download_without_output_file_is_named_tgm(server, tmp_path, monkeypatch):
+    server.spec = Spec(BODY, content_type="application/vnd.ecmwf.tensogram")
+    monkeypatch.chdir(tmp_path)
+
+    result = manager()._download(get(server), None, False, request_id="req-1")
+
+    assert os.path.basename(result) == "req-1.tgm"
+    assert saved_file(result).read_bytes() == BODY
+
+
+def test_tensogram_decompress_false_keeps_an_encoded_stream(server, tmp_path):
+    """``decompress=False`` still names the codec, for a proxy that encoded the result anyway."""
+    payload = encode(BODY, encoding.GZIP)
+    server.spec = Spec(payload, content_encoding="gzip", content_type="application/vnd.ecmwf.tensogram")
+
+    output_file = str(tmp_path / "result.tgm")
+    result = manager()._download(get(server), output_file, False, decompress=False)
+
+    assert result == output_file + ".gz"
+    assert saved_file(result).read_bytes() == payload
 
 
 def test_octet_stream_download(server, tmp_path):
@@ -1111,7 +1150,7 @@ def test_multi_member_gzip_across_a_read_boundary(server, tmp_path, offset):
     output_file = str(tmp_path / "result.covjson")
     result = request_manager._download_to_file(get(server), output_file, append=False)
 
-    assert Path(result).read_bytes() == data + data[::-1]
+    assert saved_file(result).read_bytes() == data + data[::-1]
     assert len(server.received) == 1
 
 
@@ -1143,7 +1182,7 @@ def test_highly_compressible_body_is_written_identically(server, tmp_path, codec
     output_file = str(tmp_path / "result.covjson")
     result = manager()._download_to_file(get(server), output_file, append=False)
 
-    assert Path(result).read_bytes() == body
+    assert saved_file(result).read_bytes() == body
 
 
 # End to end through the Client

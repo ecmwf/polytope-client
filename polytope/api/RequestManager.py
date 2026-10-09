@@ -50,6 +50,16 @@ DOWNLOAD_INTERRUPTIONS = (
     ConnectionError,
 )
 
+#: Media types the service delivers as a result file, and the extension each is saved with when the
+#: caller names no output file.  Media types absent from this map are refused, except
+#: ``application/octet-stream``, which the caller may also take as bytes.
+RESULT_FILE_EXTENSIONS = {
+    "application/prs.coverage+json": ".covjson",
+    "application/x-grib": ".grib",
+    # feature extraction with format: tensogram; .tgm is the extension tensogram's own tools use
+    "application/vnd.ecmwf.tensogram": ".tgm",
+}
+
 
 class RequestManager:
     # Download retry behaviour and read size (overridable, mainly for tests)
@@ -871,16 +881,17 @@ class RequestManager:
             e = helpers.BugError(situation=situation)
             e.description = "Content-Type header not found in the response"
             raise e
-        if content_type == "application/prs.coverage+json":
+        extension = RESULT_FILE_EXTENSIONS.get(content_type)
+        if extension:
             if not output_file:
                 self._logger.info(
                     "Parameter 'output_file' not " + "provided, proceeding to save data into a " + "temporary file..."
                 )
                 if request_id:
-                    output_file = request_id + ".covjson"
+                    output_file = request_id + extension
                 else:
                     random_id = "".join(random.choices(string.ascii_letters + string.digits, k=16))
-                    output_file = "tmp" + random_id + ".covjson"
+                    output_file = "tmp" + random_id + extension
             return self._download_to_file(response, output_file, append, decompress=decompress)
         elif content_type == "application/octet-stream":
             if output_file:
@@ -889,17 +900,6 @@ class RequestManager:
             # buffers the whole body in memory and decodes any Content-Encoding
             # on the way, which is why nothing is streamed or resumed here.
             return response.content
-        elif content_type == "application/x-grib":
-            if not output_file:
-                self._logger.info(
-                    "Parameter 'output_file' not " + "provided, proceeding to save data into a " + "temporary file..."
-                )
-                if request_id:
-                    output_file = request_id + ".grib"
-                else:
-                    random_id = "".join(random.choices(string.ascii_letters + string.digits, k=16))
-                    output_file = "tmp" + random_id + ".grib"
-            return self._download_to_file(response, output_file, append, decompress=decompress)
         else:
             e = helpers.BugError(situation=situation)
             e.description = "Received unsupported content type: " + content_type
