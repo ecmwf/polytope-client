@@ -49,6 +49,8 @@ class Config:
         logger=None,
         cli=False,
         extra_headers=None,
+        compression=None,
+        decompress=None,
     ):
         # hard-coded defaults are not specified in the __init__ header
         # so that session configuration specified in the headers is not
@@ -84,7 +86,10 @@ class Config:
             "insecure",
             "skip_tls",
             "extra_headers",
+            "compression",
+            "decompress",
         ]
+        self.boolean_config_items = ["quiet", "verbose", "insecure", "skip_tls", "decompress"]
 
         # Reading session configuration
         config = locals()
@@ -111,6 +116,8 @@ class Config:
         config["insecure"] = False
         config["skip_tls"] = False
         config["extra_headers"] = {}
+        config["compression"] = "auto"
+        config["decompress"] = True
         self.default_config = config
 
         # Reading system-wide file configuration
@@ -136,8 +143,15 @@ class Config:
         for var in self.file_config_items:
             val = os.environ.get(fun(var))
             if val:
+                # An environment variable arrives as a string: validate and
+                # canonicalise it here, as the session and file paths do, rather
+                # than leaving a typo to surface on the first request.
                 if var == "extra_headers":
                     val = helpers.parse_extra_headers_json(val)
+                elif var == "compression":
+                    val = helpers.normalize_compression(val)
+                elif var in self.boolean_config_items:
+                    val = helpers.normalize_boolean(fun(var), val)
                 env_var_config[var] = val
         self.env_var_config = env_var_config
 
@@ -237,10 +251,9 @@ class Config:
                 if item in self.file_config:
                     config[item] = self.file_config[item]
 
-        booleans = ["quiet", "verbose", "insecure", "skip_tls"]
-        for item in booleans:
+        for item in self.boolean_config_items:
             if isinstance(config[item], str):
-                config[item] = config[item].lower() in ["true", "1"]
+                config[item] = config[item].strip().lower() in helpers.TRUE_VALUES
 
         config["extra_headers"] = helpers.normalize_extra_headers(config.get("extra_headers", {}))
 
@@ -417,6 +430,16 @@ class Config:
         log_level: DEBUG
         Level of detail of the log messages stored in the log_file. Accepts
         any Python logging level (WARNING, INFO, DEBUG, ...).
+
+        compression: auto
+        Codec the client asks the server to compress results with. One of
+        'auto' (the best codec this client can decode, which is 'zstd, gzip'
+        on any supported installation), 'none', 'gzip' or 'zstd'.
+
+        decompress: True
+        Whether to decompress compressed results while downloading them. When
+        False, the compressed stream is saved as received and a '.gz' or
+        '.zst' suffix is appended to the output file name.
 
         user_key: None
         Polytope user key

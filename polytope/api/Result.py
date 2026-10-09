@@ -18,7 +18,7 @@
 
 
 class Result:
-    def __init__(self, request_url, output_file, append, request_manager):
+    def __init__(self, request_url, output_file, append, request_manager, decompress=None, compression=None):
         """
         This class represents a submitted Polytope request, for which a URL
         is known and pollable for status or download.
@@ -31,6 +31,10 @@ class Result:
         self.output_file = output_file
         self.append = append
         self.request_manager = request_manager
+        self.decompress = decompress
+        # The codec of the result was settled when the request was submitted, so
+        # the download asks for the one that was submitted with.
+        self.compression = compression
 
     def download(self, **kwargs):
         """
@@ -39,14 +43,14 @@ class Result:
         :param kwargs: Additional arguments to be sent to the
         Client.download method. The argument 'request_id' is automatically
         provided by the Result class and can't be overriden. The
-        'output_file' argument is also provided by the class, but can be
-        overriden.
+        'output_file', 'append', 'decompress' and 'compression' arguments are
+        also provided by the class, but can be overriden.
         :type kwargs: dictionary
         :returns: None
         """
 
         params = {**kwargs}
-        params_to_filter = ["request_id", "output_file", "append"]
+        params_to_filter = ["request_id", "output_file", "append", "decompress", "compression"]
         filtered = {}
         for param in params_to_filter:
             if param in params:
@@ -57,6 +61,8 @@ class Result:
             request_id=self.request_url,
             output_file=filtered.get("output_file", self.output_file),
             append=filtered.get("append", self.append),
+            decompress=filtered.get("decompress", self.decompress),
+            compression=filtered.get("compression", self.compression),
             **params
         )
 
