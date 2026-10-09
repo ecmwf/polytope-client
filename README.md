@@ -171,13 +171,13 @@ polytope retrieve mars request.yaml output.grib --compression gzip --no-decompre
 
 zstd needs nothing installed by hand: `urllib3 >= 2.5` and `backports.zstd` (on Python before 3.14, which has `compression.zstd` in the standard library) are dependencies of this client, so every supported installation can decode zstd and `auto` advertises `zstd, gzip`.
 
-`urllib3` 2.5 is the first version that decodes zstd with either of those two; `urllib3` before 2.5 used the `zstandard` package instead, which the client still decodes results with when it finds it. `zstd` is only advertised when `urllib3` itself can decode it, which the client settles by asking `urllib3` which codecs it found decoders for: every response that is not a result (the JSON of a submission, a poll or an error) is decoded by `urllib3`, so a codec `urllib3` does not know would make those bodies unreadable. An installation that pushed `urllib3` below the pin therefore asks for `gzip` alone, with a warning.
+`urllib3` 2.5 is the first version that decodes zstd with either of those two, which is why it is the floor this client pins. `zstd` is only advertised when `urllib3` itself can decode it, which the client settles by asking `urllib3` which codecs it found decoders for: every response that is not a result (the JSON of a submission, a poll or an error) is decoded by `urllib3`, so a codec `urllib3` does not know would make those bodies unreadable. An installation that pushed `urllib3` below the pin therefore asks for `gzip` alone, with a warning.
 
 Asking for `compression = 'zstd'` when `urllib3` cannot decode zstd is an error, and so is a result served with an encoding this client cannot decode (for example `br` or `deflate`): the client refuses rather than writing a file that is not what it claims to be.
 
 With `pointer = True` no data is downloaded, and the `contentLength` reported by the server is the size of the *compressed* result when the result is stored compressed.
 
-An interrupted download resumes from the compressed byte offset and keeps decoding where it left off, with no temporary files. If the server ignores the `Range` request, the output file is rewound and the download starts again.
+An interrupted download resumes from the compressed byte offset and keeps decoding where it left off, with no temporary files. If the server ignores the `Range` request, the output file is rewound and the download starts again. The server hands out a result-store URL rather than serving the bytes itself (polytope-server `result_encoding.rs`), so what these cases describe is the behaviour of an object store: a `Range` answered with a 200, a 206 that starts somewhere else, a `Content-Range` whose total disagrees with the `Content-Length`.
 
 &nbsp;
 

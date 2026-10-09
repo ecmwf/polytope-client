@@ -52,6 +52,11 @@ CODECS = ["identity", "gzip", "zstd"]
 needs_zstd = pytest.mark.skipif(not encoding.zstd_decoder_available(), reason="no zstd decoder is installed")
 
 
+def decoders_built(codec, times):
+    """The decoders a download of ``codec`` builds: none for an unencoded body, which needs none."""
+    return [] if codec == encoding.IDENTITY else [codec] * times
+
+
 def saved_file(result) -> Path:
     """The file a download wrote to; a download that returned the bytes wrote no file."""
     assert isinstance(result, str), f"expected a saved file, got {type(result).__name__}"
@@ -61,8 +66,6 @@ def saved_file(result) -> Path:
 def zstd_compress(body):
     module = encoding.zstd_module()
     assert module is not None, "no zstd decoder is installed"
-    if module.__name__ == "zstandard":
-        return module.ZstdCompressor().compress(body)
     return module.compress(body)
 
 
@@ -411,7 +414,7 @@ def test_interrupted_chunked_download_restarts_from_the_beginning(server, tmp_pa
     assert Path(output_file).read_bytes() == BODY
     assert len(server.received) == 2
     assert "range" not in server.received[1]
-    assert decoders == [codec, codec]
+    assert decoders == decoders_built(codec, 2)
 
 
 @pytest.mark.parametrize("codec", CODECS)
@@ -436,7 +439,7 @@ def test_resume_keeps_the_decoder_state(server, tmp_path, codec, monkeypatch):
     assert len(server.received) == 2
     assert server.received[1]["range"] == "bytes=%d-" % (len(payload) // 3)
     # The decoder was built once and kept its state across the resume.
-    assert decoders == [codec]
+    assert decoders == decoders_built(codec, 1)
 
 
 @pytest.mark.parametrize("resumed_type", ["binary/octet-stream", "application/xml", "application/x-grib"])
@@ -486,7 +489,7 @@ def test_resume_restarts_when_the_server_ignores_the_range(server, tmp_path, cod
     assert server.received[1]["range"] == "bytes=%d-" % (len(payload) // 3)
     # The Range was ignored (200), so the decoder was rebuilt and the partial
     # output discarded.
-    assert decoders == [codec, codec]
+    assert decoders == decoders_built(codec, 2)
 
 
 @pytest.mark.parametrize("append", [False, True])
@@ -537,7 +540,7 @@ def test_206_that_starts_elsewhere_is_treated_as_a_reset(server, tmp_path, codec
     assert len(server.received) == 2
     assert server.received[1]["range"] == "bytes=%d-" % (len(payload) // 3)
     # The bytes already written were discarded and the decoder rebuilt.
-    assert decoders == [codec, codec]
+    assert decoders == decoders_built(codec, 2)
 
 
 @pytest.mark.parametrize(
@@ -855,7 +858,7 @@ def test_explicit_zstd_without_urllib3_support_is_refused(monkeypatch):
 
     hint = encoding.zstd_hint()
     # The hint names the decoder this urllib3 looks for, not just any package.
-    assert any(package in hint for package in ["backports.zstd", "compression.zstd", "zstandard"])
+    assert any(package in hint for package in ["backports.zstd", "compression.zstd"])
     assert hint in str(raised.value)
 
 
@@ -1122,14 +1125,14 @@ def test_invalid_decompress_environment_variable_is_refused(tmp_path, monkeypatc
 def test_zstd_multiple_frames():
     stream = zstd_compress(b"first ") + zstd_compress(b"second")
     decoder = encoding.make_decoder(encoding.ZSTD)
-    assert decoder.decompress(stream) == b"first second"
+    assert b"".join(decoder.pieces(stream)) == b"first second"
     assert decoder.eof
 
 
 def test_gzip_multiple_members():
     stream = gzip.compress(b"first ") + gzip.compress(b"second")
     decoder = encoding.make_decoder(encoding.GZIP)
-    assert decoder.decompress(stream) == b"first second"
+    assert b"".join(decoder.pieces(stream)) == b"first second"
     assert decoder.eof
 
 
@@ -1166,8 +1169,7 @@ def test_decoding_is_bounded_by_the_slice_size(codec, monkeypatch):
 
     assert b"".join(pieces) == body
     assert decoder.eof
-    if decoder.bounds_output:
-        assert max(len(piece) for piece in pieces) <= 64 * 1024
+    assert max(len(piece) for piece in pieces) <= 64 * 1024
 
 
 @pytest.mark.parametrize("codec", [encoding.GZIP, encoding.ZSTD])

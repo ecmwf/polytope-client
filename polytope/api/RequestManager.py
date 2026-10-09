@@ -554,7 +554,8 @@ class RequestManager:
         start = time.time()
         mode = "ab" if append else "wb"
         base_size = os.path.getsize(output_file) if append and os.path.exists(output_file) else 0
-        decoder = encoding.make_decoder(codec) if decompress else None
+        # An unencoded body needs no decoder: the chunks are written as they arrive.
+        decoder = encoding.make_decoder(codec) if decompress and codec != encoding.IDENTITY else None
         received_bytes = 0
         decoded_written = 0
         attempts = 1
@@ -750,6 +751,13 @@ class RequestManager:
         A 206 is only a continuation of what was already written when its
         Content-Range says so: a store that answers with the whole object, or
         with a different object altogether, has to be treated as a restart.
+
+        The cases below belong to an object store rather than to the Polytope
+        server: a result is handed to the client as a result-store URL
+        (polytope-server ``result_encoding.rs``) and the bytes are served from
+        there, so a Range answered with a 200, a 206 that starts elsewhere and a
+        Content-Range whose total disagrees with the Content-Length are all
+        behaviour of a store this client does not control.
         """
         if response.status_code != requests.codes.partial_content:
             return False
@@ -858,7 +866,8 @@ class RequestManager:
         output_handler.truncate(base_size)
         output_handler.seek(base_size)
         pbar.reset(total=content_length)
-        return (encoding.make_decoder(codec) if decompress else None), 0, 0
+        decoder = encoding.make_decoder(codec) if decompress and codec != encoding.IDENTITY else None
+        return decoder, 0, 0
 
     def _write_buffered_body(self, body, output_file, append, codec, decompress):
         if codec != encoding.IDENTITY and not decompress:

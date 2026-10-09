@@ -59,11 +59,10 @@ SUFFIXES = {GZIP: ".gz", ZSTD: ".zst"}
 MAX_DECODED_SLICE = 8 * 1024 * 1024
 
 #: Modules that provide a streaming zstd decompressor, in the order urllib3
-#: itself tries them: the standard library module (Python 3.14+), its backport,
-#: and the 'zstandard' package that urllib3 before 2.5 used. One of the first
-#: two is always installed, since 'backports.zstd' is a dependency of this
-#: client; the third covers an environment that bypassed the urllib3 >= 2.5 pin.
-ZSTD_MODULES = ("compression.zstd", "backports.zstd", "zstandard")
+#: itself tries them: the standard library module (Python 3.14+) and its
+#: backport. One of the two is always installed, since 'backports.zstd' is a
+#: dependency of this client on every earlier interpreter.
+ZSTD_MODULES = ("compression.zstd", "backports.zstd")
 
 
 def _import(name):
@@ -85,17 +84,6 @@ def _urllib3_version():
 
 def zstd_hint():
     """How to give the installed urllib3 a zstd decoder."""
-    version = _urllib3_version()
-    if version and version < (2, 0):
-        return (
-            "upgrade to urllib3 2.5 or later, the floor this client depends on, since this urllib3 "
-            "cannot decode zstd at all"
-        )
-    if version and version < (2, 5):
-        return (
-            "upgrade to urllib3 2.5 or later, the floor this client depends on, or install the "
-            "'zstandard' package, which this urllib3 decodes zstd with"
-        )
     if sys.version_info >= (3, 14):
         return (
             "use a Python built with zstd support (urllib3 decodes zstd with the standard library's "
@@ -125,15 +113,12 @@ def zstd_decoder_available():
 def zstd_decompressobj():
     """Return a streaming zstd decompressor for a single frame.
 
-    Every backend exposes ``decompress(data)`` and ``eof``; the standard library
-    one and its backport also take a ``max_length`` and expose ``needs_input``,
-    which is what bounds how much a single call may produce.
+    Both backends expose ``decompress(data, max_length)``, ``needs_input`` and
+    ``eof``, which is what bounds how much a single call may produce.
     """
     module = zstd_module()
     if module is None:
         raise unsupported_encoding_error(ZSTD, reason="no zstd decoder is installed")
-    if module.__name__ == "zstandard":
-        return module.ZstdDecompressor().decompressobj()
     return module.ZstdDecompressor()
 
 
@@ -251,39 +236,11 @@ def add_suffix(path, codec):
     return path + extension
 
 
-class IdentityDecoder:
-    """Pass-through decoder for an unencoded body."""
-
-    codec = IDENTITY
-
-    #: Whether reaching the end of the codec's stream can be detected.
-    verifies_end_of_stream = False
-
-    #: Whether a single call is guaranteed not to produce more than
-    #: MAX_DECODED_SLICE bytes of output.
-    bounds_output = True
-
-    def pieces(self, data):
-        if data:
-            yield data
-
-    def decompress(self, data):
-        return data
-
-    def flush(self):
-        return b""
-
-    @property
-    def eof(self):
-        return True
-
-
 class GzipDecoder:
     """Streaming gzip decoder whose state survives a resumed request."""
 
     codec = GZIP
     verifies_end_of_stream = True
-    bounds_output = True
 
     def __init__(self):
         self._obj = zlib.decompressobj(31)
@@ -304,9 +261,6 @@ class GzipDecoder:
                     yield out
             data = self._obj.unused_data if self._obj.eof else b""
 
-    def decompress(self, data):
-        return b"".join(self.pieces(data))
-
     def flush(self):
         return self._obj.flush()
 
@@ -324,40 +278,22 @@ class ZstdDecoder:
     def __init__(self):
         self._new = zstd_decompressobj
         self._obj = self._new()
-        # compression.zstd and backports.zstd take a max_length and say whether
-        # they need more input; the decompressobj() of the 'zstandard' package
-        # takes neither, so with that backend what one call decodes is only
-        # bounded by how much the data expands.
-        self.bounds_output = hasattr(self._obj, "needs_input")
 
     def pieces(self, data):
-        """Decode 'data', in slices of at most MAX_DECODED_SLICE bytes when the
-        backend allows it."""
+        """Decode 'data' into slices of at most MAX_DECODED_SLICE bytes."""
         while data:
             if self._obj.eof:
                 # A new zstd frame follows the one just finished.
                 self._obj = self._new()
-            if self.bounds_output:
-                for piece in self._bounded_pieces(data):
-                    yield piece
-            else:
-                out = self._obj.decompress(data)
-                if out:
-                    yield out
-            # Old versions of 'zstandard' do not expose unused_data at all.
-            data = getattr(self._obj, "unused_data", b"") if self._obj.eof else b""
-
-    def _bounded_pieces(self, data):
-        out = self._obj.decompress(data, MAX_DECODED_SLICE)
-        if out:
-            yield out
-        while not self._obj.needs_input and not self._obj.eof:
-            out = self._obj.decompress(b"", MAX_DECODED_SLICE)
+            out = self._obj.decompress(data, MAX_DECODED_SLICE)
             if out:
                 yield out
-
-    def decompress(self, data):
-        return b"".join(self.pieces(data))
+            # What the slice above left behind is decoded without more input.
+            while not self._obj.needs_input and not self._obj.eof:
+                out = self._obj.decompress(b"", MAX_DECODED_SLICE)
+                if out:
+                    yield out
+            data = self._obj.unused_data if self._obj.eof else b""
 
     def flush(self):
         return b""
@@ -368,8 +304,9 @@ class ZstdDecoder:
 
 
 def make_decoder(codec):
+    """A streaming decoder for ``codec``; the identity codec needs none (the caller writes the bytes)."""
     if codec == GZIP:
         return GzipDecoder()
     if codec == ZSTD:
         return ZstdDecoder()
-    return IdentityDecoder()
+    raise unsupported_encoding_error(codec, reason="unknown codec")
