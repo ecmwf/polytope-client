@@ -21,6 +21,11 @@
             "additionalProperties": {
                 "type": ["string", "number", "integer", "boolean", "null"]
             }
-        }
+        },
+        "compression": {
+            "type": "string",
+            "enum": ["auto", "none", "gzip", "zstd"]
+        },
+        "decompress": {"type": "boolean"}
     }
 }

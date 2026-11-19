@@ -55,6 +55,18 @@ doc = parse(Client.retrieve.__doc__)
 )
 @click.option("append", "--append", default=False, is_flag=True, help=doc.params[7].description)
 @click.option("pointer", "--pointer", default=False, is_flag=True, help=doc.params[8].description)
+@click.option(
+    "compression",
+    "--compression",
+    type=click.Choice(["auto", "none", "gzip", "zstd"]),
+    help=doc.params[9].description,
+)
+@click.option(
+    "decompress",
+    "--decompress/--no-decompress",
+    default=None,
+    help=doc.params[10].description,
+)
 @helpers.user_configurable
 def retrieve(**kwargs):
     session_args, other_args = helpers.filter_session_args(**kwargs)
@@ -167,6 +179,18 @@ doc = parse(Client.download.__doc__)
 )
 @click.option("append", "--append", default=False, is_flag=True, help=doc.params[5].description)
 @click.option("pointer", "--pointer", default=False, is_flag=True, help=doc.params[6].description)
+@click.option(
+    "compression",
+    "--compression",
+    type=click.Choice(["auto", "none", "gzip", "zstd"]),
+    help=doc.params[7].description,
+)
+@click.option(
+    "decompress",
+    "--decompress/--no-decompress",
+    default=None,
+    help=doc.params[8].description,
+)
 @helpers.user_configurable
 def download(**kwargs):
     session_args, other_args = helpers.filter_session_args(**kwargs)

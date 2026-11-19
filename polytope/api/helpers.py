@@ -24,10 +24,13 @@ import socket
 import time
 from inspect import signature
 from pathlib import Path
+from typing import Any, Optional
 
 import jsonschema
 import requests
 import yaml
+
+from ..version import __version__
 
 # Exceptions
 ###
@@ -37,8 +40,8 @@ class PolytopeError(Exception):
     """Base class for exceptions in the polytope module."""
 
     def __init__(self, situation=None):
-        self.situation = situation
-        self.description = None
+        self.situation: Optional[str] = situation
+        self.description: Optional[str] = None
 
     def __str__(self):
         message = "Polytope error"
@@ -91,15 +94,15 @@ class HTTPResponseError(HTTPRequestError):
         self.description = "HTTP error."
         self.response = response
         self.expected = expected
-        self.response_title = None
-        self.messages = None
+        self.response_title: Optional[str] = None
+        self.messages: Any = None
 
     def __str__(self):
         message = super().__str__()
         if self.expected:
             expected_str = list(map(lambda x: str(x), self.expected))
             message += "\nExpected responses: " + ", ".join(expected_str)
-        message += "\nReceived response: " + self.response_title
+        message += "\nReceived response: " + str(self.response_title)
         if "message" in self.messages:
             message += "\nSummarized response:\n%s\n" % self.messages["message"]
         message += "\nDetails:\n"
@@ -240,6 +243,30 @@ def authenticated(method):
 # Header-related helper functions
 ###
 
+#: Content types of a request result. Their bodies are downloaded in a stream,
+#: never buffered or parsed as JSON by the response pre-processing.
+RESULT_CONTENT_TYPES = frozenset(["application/x-grib", "application/prs.coverage+json", "application/octet-stream"])
+
+#: Advertised to every endpoint that does not set the header explicitly. The
+#: download path sets it from the 'compression' option instead.
+DEFAULT_ACCEPT_ENCODING = "gzip"
+
+
+def user_agent():
+    return "polytope-client/%s python-requests/%s" % (__version__, requests.__version__)
+
+
+def with_default_headers(headers=None):
+    """Return a copy of 'headers' with the client's default headers filled in."""
+    headers = {} if not headers else dict(headers)
+    present = {str(name).lower() for name in headers}
+    if "user-agent" not in present:
+        headers["User-Agent"] = user_agent()
+    if "accept-encoding" not in present:
+        headers["Accept-Encoding"] = DEFAULT_ACCEPT_ENCODING
+    return headers
+
+
 # RFC 9110 token syntax for field names.
 _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
@@ -319,6 +346,37 @@ def normalize_extra_headers(extra_headers, reject_unsafe=True):
     return normalized
 
 
+#: Spellings accepted for a boolean configuration item given as a string.
+TRUE_VALUES = ("true", "1")
+FALSE_VALUES = ("false", "0")
+
+
+def normalize_boolean(name, value):
+    """Validate and canonicalise a boolean configuration item."""
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in TRUE_VALUES:
+        return True
+    if normalized in FALSE_VALUES:
+        return False
+    raise ValueError(
+        "Invalid %s value '%s'. Valid values are: %s" % (name, value, ", ".join(TRUE_VALUES + FALSE_VALUES))
+    )
+
+
+def normalize_compression(value):
+    """Validate and canonicalise the 'compression' configuration item."""
+    from . import encoding
+
+    normalized = str(value).strip().lower()
+    if normalized not in encoding.COMPRESSION_OPTIONS:
+        raise ValueError(
+            "Invalid compression value '%s'. Valid values are: %s" % (value, ", ".join(encoding.COMPRESSION_OPTIONS))
+        )
+    return normalized
+
+
 # Logging-related helper functions
 ###
 
@@ -377,7 +435,7 @@ def set_stream_handler(logger, quiet, log_level):
         new_handler.setLevel(numeric_level)
         formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s", "%Y-%m-%d %H:%M:%S")
         new_handler.setFormatter(formatter)
-        new_handler._polytope_handler_type = "stream"
+        setattr(new_handler, "_polytope_handler_type", "stream")
         logger.addHandler(new_handler)
         # Prevent messages from being emitted twice via ancestor (root) handlers
         # when the application also configures logging.
@@ -462,7 +520,7 @@ def convert_back(dictionary):
     for k, v in dictionary.items():
         if k == "port":
             dictionary[k] = int(v)
-        elif k in ["quiet", "verbose", "insecure", "skip_tls"]:
+        elif k in ["quiet", "verbose", "insecure", "skip_tls", "decompress"]:
             if isinstance(v, bool):
                 # The 'convert_back' function is used in two similar but
                 # different scenarios:
@@ -486,7 +544,7 @@ def convert_back(dictionary):
                 raise ValueError(
                     "When calling 'polytope config set', "
                     + "the values for the keys 'quiet', 'verbose', "
-                    + "'insecure' and 'skip_tls' "
+                    + "'insecure', 'skip_tls' and 'decompress' "
                     + "can only take 'True' or 'False' "
                     + "(the same applies if calling "
                     + "polytope.api.Client.set_config or "
@@ -496,6 +554,8 @@ def convert_back(dictionary):
             dictionary[k] = os.path.expanduser(v)
         elif k == "extra_headers":
             dictionary[k] = normalize_extra_headers(v)
+        elif k == "compression":
+            dictionary[k] = normalize_compression(v)
 
 
 def validate_config(dictionary):
@@ -541,7 +601,7 @@ def read_config(config_path):
     return found_config
 
 
-def process_response(response, situation, url, method, stream, request_content, expected):
+def process_response(response, situation, url, method, stream, request_content, expected, result_body=False):
     # This function ingests an HTTP response (as yield by the 'requests' python
     # module) and performs common checks and operations needed for all responses
     # received by the Polytope client. Returns a 'title' with the kind of response
@@ -568,7 +628,15 @@ def process_response(response, situation, url, method, stream, request_content, 
     response_title = response_type_str + " (" + str(response.status_code) + ")"
 
     content_type = response.headers.get("Content-Type")
-    if content_type == "application/x-grib":
+    # The body of a result is left unread here: reading it would
+    # buffer (and decode) the whole download, and the streaming downloader would
+    # find nothing left to read. The caller says so for the requests it makes to
+    # download a result, because a result store labels those bodies as it likes
+    # ('binary/octet-stream' from MinIO, 'application/xml' for an error); the
+    # content types are what the generic path has to go by.
+    is_result_body = (result_body and 200 <= response.status_code < 300) or content_type == "application/x-grib"
+    is_result_body = is_result_body or (stream and response.status_code < 400 and content_type in RESULT_CONTENT_TYPES)
+    if is_result_body:
         message = "**skipped**"
         content_length = response.headers.get("Content-Length")
         if content_length:
@@ -603,7 +671,7 @@ def process_response(response, situation, url, method, stream, request_content, 
         response_messages = response_values
         e.messages = response_messages
         if response_type_str == "INVALID RESPONSE CODE":
-            e.description += " Invalid HTTP response received from the server."
+            e.description = str(e.description) + " Invalid HTTP response received from the server."
         else:
             e.description = "HTTP " + e.response_title
         if response.status_code == 401 and "expired" in response_messages[0]:
@@ -616,9 +684,18 @@ def process_response(response, situation, url, method, stream, request_content, 
     return response_title, response_messages
 
 
-def try_request(method, situation, expected, logger, stream=False, skip_tls=False, session=None, **kwargs):
+def try_request(
+    method, situation, expected, logger, stream=False, skip_tls=False, session=None, result_body=False, **kwargs
+):
+    """Make an HTTP request and pre-process the response.
+
+    'result_body' marks a request whose successful response is the body of a
+    result, to be read by the caller instead of here, whatever Content-Type the
+    result store labels it with.
+    """
     url = kwargs.get("url", None)
     verify = not skip_tls
+    kwargs["headers"] = with_default_headers(kwargs.get("headers"))
     request_content = {"headers": kwargs.get("headers", None), "json": kwargs.get("json", None)}
 
     def retriable(code):
@@ -637,6 +714,7 @@ def try_request(method, situation, expected, logger, stream=False, skip_tls=Fals
     max_attempts = 10
     sleep = 120
     success = False
+    response = None
     while attempt <= max_attempts:
         try:
             if session is None:
@@ -658,7 +736,8 @@ def try_request(method, situation, expected, logger, stream=False, skip_tls=Fals
                     "Recovering from HTTP error ("
                     + str(response.status_code)
                     + ": "
-                    + requests.status_codes._codes[response.status_code][0]
+                    # requests only exposes the code -> name table privately
+                    + getattr(requests.status_codes, "_codes")[response.status_code][0]
                     + ")"
                 )
                 logger.warning(message)
@@ -671,7 +750,7 @@ def try_request(method, situation, expected, logger, stream=False, skip_tls=Fals
         attempt = attempt + 1
         time.sleep(sleep)
 
-    if not success:
+    if not success or response is None:
         e = GivenUpRequestError(
             situation=situation,
             url=kwargs.get("url"),
@@ -683,9 +762,9 @@ def try_request(method, situation, expected, logger, stream=False, skip_tls=Fals
         raise e
 
     response_title, response_messages = process_response(
-        response, situation, url, method, stream, request_content, expected
+        response, situation, url, method, stream, request_content, expected, result_body=result_body
     )
 
-    logger.debug("Polytope client received HTTP " + response_title)
+    logger.debug("Polytope client received HTTP " + str(response_title))
 
     return response, response_messages

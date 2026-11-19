@@ -58,6 +58,9 @@ class Client:
         insecure=None,
         skip_tls=None,
         extra_headers=None,
+        # downloads
+        compression=None,
+        decompress=None,
         # other
         cli=False,
     ):
@@ -104,6 +107,16 @@ class Client:
         :type skip_tls: bool
         :param extra_headers: Additional safe HTTP headers to send with requests.
         :type extra_headers: dict
+        :param compression: Codec the client asks the server to compress
+        results with: 'auto' (default; the best codec this client can decode,
+        which is 'zstd, gzip' on any supported installation), 'none', 'gzip'
+        or 'zstd'.
+        :type compression: str
+        :param decompress: Whether to decompress compressed results while
+        downloading them (True; default). When False, the compressed stream is
+        saved as received and a '.gz' or '.zst' suffix is appended to the
+        output file name.
+        :type decompress: bool
         :param cli: Whether the Client is being created from a CLI or not
         (configured automatically). This will determine whether some messages
         are printed or not by the client.
@@ -133,6 +146,8 @@ class Client:
             insecure=insecure,
             skip_tls=skip_tls,
             extra_headers=extra_headers,
+            compression=compression,
+            decompress=decompress,
             logger=self._logger,
             cli=self._cli,
         )

@@ -28,14 +28,45 @@ import time
 from pathlib import Path
 
 import requests
+import urllib3
 import yaml
 from tqdm import tqdm
 
-from . import helpers
+from . import encoding, helpers
 from .Result import Result
+
+#: Exceptions raised when the connection breaks in the middle of a download and
+#: resuming the transfer is sensible.
+DOWNLOAD_INTERRUPTIONS = (
+    requests.exceptions.ChunkedEncodingError,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.SSLError,
+    requests.exceptions.Timeout,
+    urllib3.exceptions.ProtocolError,
+    urllib3.exceptions.ReadTimeoutError,
+    # A TLS record that arrives broken or a session that is renegotiated away
+    # mid-body: urllib3 raises this one outside the ProtocolError hierarchy.
+    urllib3.exceptions.SSLError,
+    ConnectionError,
+)
+
+#: Media types the service delivers as a result file, and the extension each is saved with when the
+#: caller names no output file.  Media types absent from this map are refused, except
+#: ``application/octet-stream``, which the caller may also take as bytes.
+RESULT_FILE_EXTENSIONS = {
+    "application/prs.coverage+json": ".covjson",
+    "application/x-grib": ".grib",
+    # feature extraction with format: tensogram; .tgm is the extension tensogram's own tools use
+    "application/vnd.ecmwf.tensogram": ".tgm",
+}
 
 
 class RequestManager:
+    # Download retry behaviour and read size (overridable, mainly for tests)
+    _http_max_attempts = 10
+    _new_attempt_period = 10
+    _download_chunk_size = 64 * 1024
+
     def __init__(self, config, auth, coll_visitor, logger=None):
         self.config = config
         self.auth = auth
@@ -44,6 +75,16 @@ class RequestManager:
             self._logger = logger
         else:
             self._logger = logging.getLogger(__name__)
+
+    def _compression_option(self, compression=None):
+        if compression is None:
+            compression = self.config.get().get("compression", encoding.AUTO)
+        return compression
+
+    def _decompress_option(self, decompress=None):
+        if decompress is None:
+            decompress = self.config.get().get("decompress", True)
+        return bool(decompress)
 
     # GET /api/v1/requests
     # GET /api/v1/requests/<collection_id>
@@ -173,6 +214,8 @@ class RequestManager:
         attempt_period=0.1,
         append=False,
         pointer=False,
+        compression=None,
+        decompress=None,
     ):
         """
         Request retrieval of data.
@@ -299,11 +342,27 @@ class RequestManager:
         :param pointer: Whether to return the data as a logical representation
         in the format {'location': <URL>, 'contentLength': <number_of_bytes>}
         (pointer = True) or to download the data onto a file (pointer = False;
-        default).
+        default). When the server stores the result compressed, the reported
+        'contentLength' is the size of the compressed data.
         :type pointer: bool
+        :param compression: Codec to ask the server to compress the result
+        with: 'auto' (default; the best codec this client can decode, which is
+        'zstd, gzip' on any supported installation), 'none', 'gzip' or 'zstd'.
+        The codec is fixed when the request is submitted.
+        Defaults to the value of the 'compression' configuration item.
+        :type compression: str
+        :param decompress: Whether to decompress the result while downloading
+        it (True; default) or to save the compressed stream as received, with a
+        '.gz' or '.zst' suffix appended to the output file name (False).
+        Defaults to the value of the 'decompress' configuration item.
+        :type decompress: bool
         :returns: None
         """
         situation = "trying to submit a retrieval request"
+        accept_encoding = encoding.accept_encoding_header(
+            self._compression_option(compression), situation=situation, logger=self._logger
+        )
+        decompress = self._decompress_option(decompress)
 
         # replaced_level = helpers.lower_stream_handler_level(self._logger)
         # helpers.lower_stream_handler_level(self._logger)
@@ -345,7 +404,13 @@ class RequestManager:
             self._logger.info(message)
 
             url = self.config.get_url("requests", collection_id=collection)
-            headers = self.config.request_headers({"Authorization": ", ".join(self.auth.get_auth_headers())})
+            headers = self.config.request_headers(
+                {
+                    "Authorization": ", ".join(self.auth.get_auth_headers()),
+                    # The server fixes the codec of the result at submit time.
+                    "Accept-Encoding": accept_encoding,
+                }
+            )
             method = "post"
             expected_responses = [requests.codes.ok, requests.codes.accepted, requests.codes.no_content]
             # also requests.codes.other, implicitly handled by requests
@@ -388,7 +453,7 @@ class RequestManager:
                     request_results.append(result)
                 else:
                     self._logger.info("The data is immediately available for download")
-                    result_file = self._download(response, output_file, append)
+                    result_file = self._download(response, output_file, append, decompress=decompress)
                     if not output_file:
                         output_file = result_file
                     append = True
@@ -433,10 +498,20 @@ class RequestManager:
                     )
                     if warning not in warnings:
                         warnings.append(warning)
-                request_results[i] = Result(request_url, output_file, append, self)
+                request_results[i] = Result(
+                    request_url, output_file, append, self, decompress=decompress, compression=compression
+                )
             else:
                 request_results[i] = self.download(
-                    request_id, output_file, asynchronous, max_attempts, attempt_period, append, pointer
+                    request_id,
+                    output_file,
+                    asynchronous,
+                    max_attempts,
+                    attempt_period,
+                    append,
+                    pointer,
+                    compression=compression,
+                    decompress=decompress,
                 )
 
             append = True
@@ -446,110 +521,367 @@ class RequestManager:
 
         return request_results
 
-    def _download_to_file(self, response, output_file, append):
+    def _download_to_file(self, response, output_file, append, decompress=True):
+        """Stream the body of 'response' into 'output_file'.
+
+        The bytes are counted as received, before decoding, and, unless
+        'decompress' is False, fed through a streaming decoder owned by this
+        method. That count is what Content-Length announces and what byte
+        ranges address when the body carries a Content-Encoding, so it is also
+        what drives the progress bar, a resumed request and the completeness
+        check. The decoder keeps its state across a resume, which is why no
+        temporary file is needed.
+        """
         situation = "trying to download data"
-        output_file = os.path.abspath(output_file)
+        output_file = os.path.abspath(os.path.expanduser(output_file))
+        codec = encoding.content_encoding_codec(response.headers.get("Content-Encoding"), situation=situation)
+
+        buffered = getattr(response, "_content", None)
+        if isinstance(buffered, (bytes, bytearray)):
+            # The whole body was already read (and decoded) by the HTTP
+            # library, so there is nothing left to stream.
+            return self._write_buffered_body(bytes(buffered), output_file, append, codec, decompress)
+
+        if not decompress and codec != encoding.IDENTITY:
+            output_file = encoding.add_suffix(output_file, codec)
+            self._logger.info("Saving the %s-compressed data as received, without decompressing it" % codec)
+
+        content_length = self._content_length(response)
+        if content_length is None:
+            self._logger.debug("No Content-Length in the response; reading until the end of the stream")
+
         self._logger.info("Saving data into {}...".format(output_file))
         start = time.time()
-        data_downloaded = False
-        total_received = 0
-        if append:
-            mode = "ab"
-        else:
-            mode = "wb"
+        mode = "ab" if append else "wb"
+        base_size = os.path.getsize(output_file) if append and os.path.exists(output_file) else 0
+        # An unencoded body needs no decoder: the chunks are written as they arrive.
+        decoder = encoding.make_decoder(codec) if decompress and codec != encoding.IDENTITY else None
+        received_bytes = 0
+        decoded_written = 0
         attempts = 1
-        http_max_attempts = 10
-        new_attempt_period = 10
-        # hash_md5 = hashlib.md5()
-        content_length = int(response.headers["Content-Length"])
-        # checksum = response.headers['Content-MD5']
-        while not data_downloaded:
-            try:
-                with tqdm(
-                    total=content_length,
-                    unit_scale=True,
-                    unit_divisor=1024,
-                    unit="B",
-                    disable=self.config.get()["quiet"],
-                    leave=False,
-                ) as pbar:
-                    pbar.update(total_received)
-                    with open(output_file, mode) as output_handler:
-                        for chunk in response.iter_content(chunk_size=1024):
-                            if chunk:
-                                output_handler.write(chunk)
-                                # hash_md5.update(chunk)
-                                total_received += len(chunk)
-                                pbar.update(len(chunk))
-            except requests.exceptions.ConnectionError as e:
-                self._logger.warning("Download interrupted: " + str(e))
-            finally:
-                response.close()
+        http_max_attempts = self._http_max_attempts
+        new_attempt_period = self._new_attempt_period
 
-            if total_received >= content_length:
-                data_downloaded = True
-                self._logger.info("Data downloaded successfully")
-                break
+        with open(output_file, mode) as output_handler, tqdm(
+            total=content_length,
+            unit_scale=True,
+            unit_divisor=1024,
+            unit="B",
+            disable=self.config.get()["quiet"],
+            leave=False,
+        ) as pbar:
+            while True:
+                interruption = None
+                try:
+                    for chunk in self._iter_received(response, codec, situation):
+                        if not chunk:
+                            continue
+                        received_bytes += len(chunk)
+                        if decoder is None:
+                            output_handler.write(chunk)
+                            decoded_written += len(chunk)
+                        else:
+                            # One chunk of compressed bytes can decode to much
+                            # more than itself, so it is written in slices.
+                            for piece in self._decode_pieces(decoder, chunk, situation):
+                                output_handler.write(piece)
+                                decoded_written += len(piece)
+                        pbar.update(len(chunk))
+                except DOWNLOAD_INTERRUPTIONS as error:
+                    interruption = error
+                    self._logger.warning("Download interrupted: " + str(error))
+                finally:
+                    response.close()
 
-            self._logger.warning(
-                ("Download incomplete, downloaded %s " + "byte(s) out of %s") % (total_received, content_length)
-            )
+                if content_length is not None and received_bytes > content_length:
+                    e = helpers.PolytopeError(situation)
+                    e.description = "Download failed: received %s of %s bytes (Content-Length)" % (
+                        received_bytes,
+                        content_length,
+                    )
+                    raise e
 
-            method = response.request.method.lower()
-            url = response.request.url
-            headers = response.request.headers
-            # json = response.request.json()
+                # Every announced byte arrived, so an error raised afterwards (a
+                # connection reset after the last byte, a pooled connection torn
+                # down) says nothing about the data. Without a Content-Length
+                # there is nothing to verify the body against and an interruption
+                # must not be ignored.
+                verified = content_length is not None and received_bytes == content_length
+                if (interruption is None or verified) and self._download_complete(
+                    decoder, received_bytes, content_length
+                ):
+                    if decoder is not None:
+                        tail = self._decode(decoder, b"", situation, flush=True)
+                        if tail:
+                            output_handler.write(tail)
+                            decoded_written += len(tail)
+                    self._logger.info("Data downloaded successfully")
+                    break
 
-            attempts += 1
-            if attempts > http_max_attempts:
-                e = helpers.GivenUpDownloadError(
-                    situation=situation,
-                    url=url,
-                    method=method,
-                    request_content={"headers": headers},  # , 'json': json},
-                    attempts=http_max_attempts,
+                # The stream of the codec does not end where the body does, so
+                # the object on the server is truncated: downloading the same
+                # bytes again, from the start or from a byte range, cannot end
+                # any differently.
+                if verified and decoder is not None and decoder.verifies_end_of_stream and not decoder.eof:
+                    e = helpers.PolytopeError(situation)
+                    e.description = "Download failed: all %s bytes received but the %s stream has no end marker" % (
+                        content_length,
+                        decoder.codec,
+                    )
+                    raise e
+
+                method = response.request.method.lower()
+                url = response.request.url
+                headers = dict(response.request.headers)
+
+                attempts += 1
+
+                if attempts > http_max_attempts:
+                    e = helpers.GivenUpDownloadError(
+                        situation=situation,
+                        url=url,
+                        method=method,
+                        request_content={"headers": headers},
+                        attempts=http_max_attempts,
+                    )
+                    raise e
+
+                self._logger.warning(
+                    "Download interrupted after %s of %s bytes; retrying in %s s"
+                    % (
+                        received_bytes,
+                        "unknown" if content_length is None else content_length,
+                        new_attempt_period,
+                    )
                 )
-                raise e
+                time.sleep(new_attempt_period)
 
-            mode = "ab"
-            self._logger.warning("Sleeping %s seconds" % new_attempt_period)
-            time.sleep(new_attempt_period)
-            total_received = os.path.getsize(output_file)
-            headers["Range"] = "bytes=%d-" % (total_received)
-            self._logger.warning("Resuming download at byte %s" % total_received)
+                # Byte ranges address the bytes as received, which are the
+                # compressed ones when the body carries a Content-Encoding.
+                resuming = content_length is not None and received_bytes > 0
+                if resuming:
+                    headers["Range"] = "bytes=%d-" % received_bytes
+                    if codec == encoding.IDENTITY:
+                        self._logger.warning("Resuming download from byte %s of %s" % (received_bytes, content_length))
+                    else:
+                        self._logger.warning(
+                            "Resuming download from byte %s of %s of the compressed stream"
+                            % (received_bytes, content_length)
+                        )
+                else:
+                    headers.pop("Range", None)
+                    self._logger.warning("Restarting the download from the beginning")
+                    decoder, received_bytes, decoded_written = self._restart_download(
+                        output_handler, pbar, base_size, codec, decompress, content_length
+                    )
 
-            expected_responses = [requests.codes.ok]
-            response.close()
-            response, _ = helpers.try_request(
-                method,
-                situation=situation,
-                expected=expected_responses,
-                logger=self._logger,
-                stream=True,
-                url=url,
-                headers=headers,
-                skip_tls=self.config.get()["skip_tls"],  # , json = json
-            )
+                response, _ = helpers.try_request(
+                    method,
+                    situation=situation,
+                    expected=[requests.codes.ok, requests.codes.partial_content],
+                    logger=self._logger,
+                    stream=True,
+                    url=url,
+                    headers=headers,
+                    skip_tls=self.config.get()["skip_tls"],
+                    result_body=True,
+                )
 
-        e = helpers.PolytopeError(situation)
-        if total_received != content_length:
-            e.description = ("Download failed: downloaded %s byte(s) out of " + "%s") % (total_received, content_length)
-            raise e
+                if resuming and not self._range_honoured(response, received_bytes, content_length):
+                    self._logger.warning(
+                        "The server did not continue the data where the Range asked it to; "
+                        + "discarding the %s byte(s) already written" % decoded_written
+                    )
+                    codec = encoding.content_encoding_codec(
+                        response.headers.get("Content-Encoding"), situation=situation
+                    )
+                    # The decoder is rebuilt for the body that is being served
+                    # now, and so is the total it is measured against: this
+                    # response may be longer or shorter than the first one.
+                    content_length = self._content_length(response)
+                    decoder, received_bytes, decoded_written = self._restart_download(
+                        output_handler, pbar, base_size, codec, decompress, content_length
+                    )
 
         elapsed = time.time() - start
+        if decompress and codec != encoding.IDENTITY:
+            ratio = (float(decoded_written) / received_bytes) if received_bytes else 0.0
+            self._logger.info(
+                "Data saved: %s (received %s, %s, compression ratio %.2f)"
+                % (
+                    helpers.bytes_to_string(decoded_written),
+                    helpers.bytes_to_string(received_bytes),
+                    codec,
+                    ratio,
+                )
+            )
+        else:
+            self._logger.info("Data saved: %s" % helpers.bytes_to_string(decoded_written))
         if elapsed:
-            self._logger.info(("Download rate %s/s") % helpers.bytes_to_string(content_length / elapsed))
-
-        # if hash_md5.hexdigest() != checksum:
-        #    e = helpers.PolytopeError(situation)
-        #    e.description = ("Download failed: checksum of downloaded data " +
-        #        "does not match the expected checksum.")
-        #    raise e
+            self._logger.info("Download rate %s/s (received bytes)" % helpers.bytes_to_string(received_bytes / elapsed))
 
         self._logger.info("Data saved successfully into " + output_file)
         return output_file
 
-    def _download(self, response, output_file, append, request_id=None):
+    def _content_length(self, response):
+        """The number of bytes a response announces, as received, or None when unknown.
+
+        A malformed Content-Length, or several of them (which 'requests' hands
+        over joined by commas), says nothing usable about the body, so the
+        download runs to the end of the stream instead.
+        """
+        value = response.headers.get("Content-Length")
+        if value is None:
+            return None
+        try:
+            length = int(str(value).strip())
+        except ValueError:
+            length = -1
+        if length < 0:
+            self._logger.warning(
+                "The server announced a Content-Length of '%s', which is not a byte count; " % value
+                + "reading until the end of the stream instead"
+            )
+            return None
+        return length
+
+    def _range_honoured(self, response, received_bytes, content_length):
+        """Whether a response continues the download at the byte asked for.
+
+        A 206 is only a continuation of what was already written when its
+        Content-Range says so: a store that answers with the whole object, or
+        with a different object altogether, has to be treated as a restart.
+
+        The cases below belong to an object store rather than to the Polytope
+        server: a result is handed to the client as a result-store URL
+        (polytope-server ``result_encoding.rs``) and the bytes are served from
+        there, so a Range answered with a 200, a 206 that starts elsewhere and a
+        Content-Range whose total disagrees with the Content-Length are all
+        behaviour of a store this client does not control.
+        """
+        if response.status_code != requests.codes.partial_content:
+            return False
+        header = response.headers.get("Content-Range")
+        parsed = self._parse_content_range(header)
+        if parsed is None:
+            self._logger.warning(
+                "The server answered the Range request with a 206 but no readable "
+                + "Content-Range (%s)" % ("absent" if header is None else header)
+            )
+            return False
+        start, total = parsed
+        if start != received_bytes:
+            self._logger.warning(
+                "The server answered the Range request at byte %s with the bytes from %s" % (received_bytes, start)
+            )
+            return False
+        if total is not None and content_length is not None and total != content_length:
+            self._logger.warning(
+                "The server now reports %s byte(s) in total, instead of the %s first announced"
+                % (total, content_length)
+            )
+            return False
+        return True
+
+    @staticmethod
+    def _parse_content_range(value):
+        """Read a 'bytes <start>-<end>/<total>' header as (start, total).
+
+        'total' is None when the server does not state it ('*'), and the whole
+        result is None when the header is absent or cannot be read.
+        """
+        if not value:
+            return None
+        text = str(value).strip()
+        if not text.lower().startswith("bytes"):
+            return None
+        span, _, total_text = text[len("bytes") :].strip().partition("/")
+        try:
+            start = int(span.split("-")[0].strip())
+        except ValueError:
+            return None
+        total_text = total_text.strip()
+        if not total_text or total_text == "*":
+            return start, None
+        try:
+            return start, int(total_text)
+        except ValueError:
+            return start, None
+
+    def _iter_received(self, response, codec, situation):
+        """Iterate over the bytes of the body as received, before decoding.
+
+        'requests' decodes Content-Encoding transparently in iter_content(), so
+        the raw urllib3 stream with decode_content=False is the only way to see
+        (and count) the bytes that Content-Length and byte ranges refer to.
+        """
+        raw = getattr(response, "raw", None)
+        if raw is not None and hasattr(raw, "stream"):
+            return raw.stream(self._download_chunk_size, decode_content=False)
+        if codec != encoding.IDENTITY:
+            e = helpers.BugError(situation=situation)
+            e.description = "Cannot read the undecoded %s-encoded body of this HTTP response" % codec
+            raise e
+        return response.iter_content(chunk_size=self._download_chunk_size)
+
+    def _decode_pieces(self, decoder, chunk, situation):
+        """Yield the decoded slices of one received chunk, one write at a time."""
+        pieces = decoder.pieces(chunk)
+        while True:
+            try:
+                piece = next(pieces)
+            except StopIteration:
+                return
+            except Exception as error:
+                raise self._decode_error(decoder, error, situation) from error
+            yield piece
+
+    def _decode(self, decoder, chunk, situation, flush=False):
+        try:
+            return decoder.flush() if flush else decoder.decompress(chunk)
+        except Exception as error:
+            raise self._decode_error(decoder, error, situation) from error
+
+    @staticmethod
+    def _decode_error(decoder, error, situation):
+        e = helpers.PolytopeError(situation)
+        e.description = "Download failed: the %s data received from the server could not be decoded (%s)" % (
+            decoder.codec,
+            error,
+        )
+        return e
+
+    @staticmethod
+    def _download_complete(decoder, received_bytes, content_length):
+        if content_length is not None and received_bytes != content_length:
+            return False
+        if decoder is not None and decoder.verifies_end_of_stream and not decoder.eof:
+            return False
+        return True
+
+    @staticmethod
+    def _restart_download(output_handler, pbar, base_size, codec, decompress, content_length):
+        """Drop everything downloaded so far and start the decoding over."""
+        output_handler.flush()
+        output_handler.truncate(base_size)
+        output_handler.seek(base_size)
+        pbar.reset(total=content_length)
+        decoder = encoding.make_decoder(codec) if decompress and codec != encoding.IDENTITY else None
+        return decoder, 0, 0
+
+    def _write_buffered_body(self, body, output_file, append, codec, decompress):
+        if codec != encoding.IDENTITY and not decompress:
+            self._logger.warning(
+                "The %s-encoded body had already been decoded by the HTTP library; " % codec
+                + "saving the decompressed data instead"
+            )
+        with open(output_file, "ab" if append else "wb") as output_handler:
+            output_handler.write(body)
+        self._logger.info("Data saved: %s" % helpers.bytes_to_string(len(body)))
+        self._logger.info("Data saved successfully into " + output_file)
+        return output_file
+
+    def _download(self, response, output_file, append, request_id=None, decompress=True):
         situation = "trying to download data"
 
         content_type = response.headers.get("Content-Type", None)
@@ -558,40 +890,25 @@ class RequestManager:
             e = helpers.BugError(situation=situation)
             e.description = "Content-Type header not found in the response"
             raise e
-        if content_type == "application/prs.coverage+json":
+        extension = RESULT_FILE_EXTENSIONS.get(content_type)
+        if extension:
             if not output_file:
                 self._logger.info(
                     "Parameter 'output_file' not " + "provided, proceeding to save data into a " + "temporary file..."
                 )
                 if request_id:
-                    output_file = request_id + ".covjson"
+                    output_file = request_id + extension
                 else:
                     random_id = "".join(random.choices(string.ascii_letters + string.digits, k=16))
-                    output_file = "tmp" + random_id + ".covjson"
-            return self._download_to_file(response, output_file, append)
+                    output_file = "tmp" + random_id + extension
+            return self._download_to_file(response, output_file, append, decompress=decompress)
         elif content_type == "application/octet-stream":
             if output_file:
-                output_file = os.path.expanduser(output_file)
-                if append:
-                    mode = "ab"
-                else:
-                    mode = "wb"
-                with open(output_file, mode) as output_file_handler:
-                    output_file_handler.write(response.content)
-                self._logger.info("Data (" + content_type + ") saved successfully into " + output_file)
-                return output_file
+                return self._download_to_file(response, output_file, append, decompress=decompress)
+            # No file to write to, so the caller gets the data itself: 'requests'
+            # buffers the whole body in memory and decodes any Content-Encoding
+            # on the way, which is why nothing is streamed or resumed here.
             return response.content
-        elif content_type == "application/x-grib":
-            if not output_file:
-                self._logger.info(
-                    "Parameter 'output_file' not " + "provided, proceeding to save data into a " + "temporary file..."
-                )
-                if request_id:
-                    output_file = request_id + ".grib"
-                else:
-                    random_id = "".join(random.choices(string.ascii_letters + string.digits, k=16))
-                    output_file = "tmp" + random_id + ".grib"
-            return self._download_to_file(response, output_file, append)
         else:
             e = helpers.BugError(situation=situation)
             e.description = "Received unsupported content type: " + content_type
@@ -609,6 +926,8 @@ class RequestManager:
         attempt_period=0.03,
         append=False,
         pointer=False,
+        compression=None,
+        decompress=None,
     ):
         """
         Download data of a request.
@@ -644,14 +963,32 @@ class RequestManager:
         :param pointer: Whether to return the data as a logical representation
         in the format {'location': <URL>, 'contentLength': <number_of_bytes>}
         (pointer = True) or to download the data onto a file (pointer = False;
-        default).
+        default). When the server stores the result compressed, the reported
+        'contentLength' is the size of the compressed data.
         :type pointer: bool
+        :param compression: Codec advertised to the server: 'auto' (default;
+        the best codec this client can decode, which is 'zstd, gzip' on any
+        supported installation), 'none', 'gzip' or 'zstd'.
+        The codec a result is stored with is settled when the request is
+        submitted, so this is the codec that submission asked for; a server
+        that compresses responses as it serves them honours it here too.
+        Defaults to the value of the 'compression' configuration item.
+        :type compression: str
+        :param decompress: Whether to decompress the result while downloading
+        it (True; default) or to save the compressed stream as received, with a
+        '.gz' or '.zst' suffix appended to the output file name (False).
+        Defaults to the value of the 'decompress' configuration item.
+        :type decompress: bool
         :returns: None
         """
         if not max_attempts:
             max_attempts = float("inf")
 
         situation = "trying to download data"
+        accept_encoding = encoding.accept_encoding_header(
+            self._compression_option(compression), situation=situation, logger=self._logger
+        )
+        decompress = self._decompress_option(decompress)
 
         data_ready = False
         status = None
@@ -666,7 +1003,12 @@ class RequestManager:
             request_id = url.split("/")[-1]
         else:
             url = self.config.get_url("requests", request_id=request_id)
-        headers = self.config.request_headers({"Authorization": ", ".join(self.auth.get_auth_headers())})
+        headers = self.config.request_headers(
+            {
+                "Authorization": ", ".join(self.auth.get_auth_headers()),
+                "Accept-Encoding": accept_encoding,
+            }
+        )
         method = "get"
         expected_responses = [requests.codes.ok, requests.codes.accepted]
         # requests will handle automatically requests.codes.other
@@ -722,11 +1064,14 @@ class RequestManager:
                 "contentLength": response.headers.get("Content-Length"),
                 "contentType": response.headers.get("Content-Type"),
             }
+            # The body of the result was left unread for the downloader
+            # that is not going to run: give the connection back to the pool.
+            response.close()
             if self.config._cli:
                 print(pprint.pformat(result))
             return result
 
-        return self._download(response, output_file, append, request_id)
+        return self._download(response, output_file, append, request_id, decompress=decompress)
 
     # POST /api/v1/requests/<collection> with verb = archive
     def archive(
